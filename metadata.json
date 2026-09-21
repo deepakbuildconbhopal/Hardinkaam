@@ -1,0 +1,6 @@
+{
+  "name": "HARDINKAAM",
+  "description": "On-demand home services marketplace, skilled professionals, business partner fleet, Deepak Buildcon all-India franchise portal, and one-click production website deployment management system.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

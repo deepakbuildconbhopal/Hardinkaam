@@ -1,0 +1,668 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account document containing role, basic info, and contact details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "User Firebase Auth UID" },
+        "name": { "type": "string", "description": "Full name" },
+        "email": { "type": "string", "description": "Email address" },
+        "phone": { "type": "string", "description": "Phone number" },
+        "role": { "type": "string", "enum": ["customer", "service_man", "business_partner", "admin"], "description": "Primary role of user" },
+        "avatar": { "type": "string", "description": "Profile picture URL" },
+        "address": { "type": "string", "description": "Default address" },
+        "city": { "type": "string", "description": "City of residence/operation" },
+        "state": { "type": "string", "description": "State" },
+        "pincode": { "type": "string", "description": "Postal code" },
+        "status": { "type": "string", "enum": ["active", "suspended", "pending"], "description": "Account status" },
+        "createdAt": { "type": "string", "description": "ISO timestamp or server timestamp" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp or server timestamp" }
+      },
+      "required": ["id", "name", "email", "role"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Service categories available in HARDINKAAM (e.g., Electrician, Plumber, AC Repair, Cleaning)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Category ID" },
+        "name": { "type": "string", "description": "Category Name" },
+        "slug": { "type": "string", "description": "URL slug / identifier" },
+        "description": { "type": "string", "description": "Category description" },
+        "icon": { "type": "string", "description": "Icon identifier or URL" },
+        "imageUrl": { "type": "string", "description": "Category banner or preview image" },
+        "order": { "type": "number", "description": "Display order" },
+        "isActive": { "type": "boolean", "description": "Whether category is visible and active" }
+      },
+      "required": ["id", "name"]
+    },
+    "Service": {
+      "title": "Service",
+      "description": "Individual services offered under a category",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Service ID" },
+        "categoryId": { "type": "string", "description": "Category ID reference" },
+        "categoryName": { "type": "string", "description": "Category display name" },
+        "name": { "type": "string", "description": "Service title" },
+        "description": { "type": "string", "description": "Full service details" },
+        "basePrice": { "type": "number", "description": "Starting/base price in INR" },
+        "priceUnit": { "type": "string", "description": "Price unit, e.g., per visit, per hour, fixed" },
+        "durationMinutes": { "type": "number", "description": "Estimated service time in minutes" },
+        "imageUrl": { "type": "string", "description": "Service hero image" },
+        "rating": { "type": "number", "description": "Average rating 1-5" },
+        "ratingCount": { "type": "number", "description": "Total review count" },
+        "isActive": { "type": "boolean", "description": "Service active status" }
+      },
+      "required": ["id", "categoryId", "name", "basePrice"]
+    },
+    "ServiceMan": {
+      "title": "ServiceMan",
+      "description": "Service professional profile details, verification status, categories served, and availability",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "User ID / Service professional ID" },
+        "userId": { "type": "string", "description": "Linked user account ID" },
+        "name": { "type": "string", "description": "Professional's full name" },
+        "phone": { "type": "string", "description": "Contact phone" },
+        "email": { "type": "string", "description": "Contact email" },
+        "photoUrl": { "type": "string", "description": "Profile picture" },
+        "categoryIds": { "type": "array", "description": "Categories served" },
+        "categoryNames": { "type": "array", "description": "Names of categories served" },
+        "serviceArea": { "type": "string", "description": "City or neighborhoods served" },
+        "experienceYears": { "type": "number", "description": "Years in trade" },
+        "hourlyRate": { "type": "number", "description": "Base rate" },
+        "isAvailable": { "type": "boolean", "description": "Current online / offline toggle" },
+        "isVerified": { "type": "boolean", "description": "KYC verified by admin" },
+        "kycStatus": { "type": "string", "enum": ["pending", "verified", "rejected"], "description": "KYC review status" },
+        "rating": { "type": "number", "description": "Average rating" },
+        "totalJobs": { "type": "number", "description": "Total completed jobs" },
+        "partnerId": { "type": "string", "description": "Optional business partner association" },
+        "createdAt": { "type": "string", "description": "Timestamp created" }
+      },
+      "required": ["id", "userId", "name", "isAvailable"]
+    },
+    "BusinessPartner": {
+      "title": "BusinessPartner",
+      "description": "Business partner profile managing multiple technicians or vendor services",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Business partner ID" },
+        "userId": { "type": "string", "description": "User account ID" },
+        "companyName": { "type": "string", "description": "Organization or trade name" },
+        "contactPerson": { "type": "string", "description": "Principal contact name" },
+        "email": { "type": "string", "description": "Company email" },
+        "phone": { "type": "string", "description": "Company phone" },
+        "gstNumber": { "type": "string", "description": "GST or tax identification" },
+        "address": { "type": "string", "description": "Registered business address" },
+        "commissionRate": { "type": "number", "description": "Partner commission rate %" },
+        "isVerified": { "type": "boolean", "description": "Admin verification flag" },
+        "techniciansCount": { "type": "number", "description": "Number of assigned service professionals" }
+      },
+      "required": ["id", "userId", "companyName"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Customer service booking record throughout lifecycle",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique booking reference ID" },
+        "customerId": { "type": "string", "description": "Customer user ID" },
+        "customerName": { "type": "string", "description": "Customer name" },
+        "customerPhone": { "type": "string", "description": "Customer phone" },
+        "serviceId": { "type": "string", "description": "Service ID" },
+        "serviceName": { "type": "string", "description": "Service title" },
+        "categoryId": { "type": "string", "description": "Category ID" },
+        "categoryName": { "type": "string", "description": "Category name" },
+        "serviceManId": { "type": "string", "description": "Assigned service professional ID" },
+        "serviceManName": { "type": "string", "description": "Assigned professional name" },
+        "serviceManPhone": { "type": "string", "description": "Assigned professional phone" },
+        "partnerId": { "type": "string", "description": "Associated business partner ID if any" },
+        "scheduledDate": { "type": "string", "description": "Booking date (YYYY-MM-DD)" },
+        "scheduledTime": { "type": "string", "description": "Time slot (e.g., 10:00 AM - 12:00 PM)" },
+        "address": { "type": "string", "description": "Service location address" },
+        "notes": { "type": "string", "description": "Customer special instructions" },
+        "amount": { "type": "number", "description": "Total charge amount" },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "accepted", "on_the_way", "in_progress", "completed", "cancelled", "rejected"],
+          "description": "Current lifecycle status"
+        },
+        "paymentStatus": {
+          "type": "string",
+          "enum": ["unpaid", "paid", "refunded", "cod"],
+          "description": "Payment status"
+        },
+        "paymentMethod": { "type": "string", "enum": ["cash", "upi", "card", "wallet"], "description": "Payment method" },
+        "isReviewed": { "type": "boolean", "description": "Whether customer has submitted a review" },
+        "otp": { "type": "string", "description": "Secure delivery completion OTP verification code" },
+        "otpCreatedAt": { "type": "string", "description": "Timestamp when completion OTP was generated" },
+        "otpAttempts": { "type": "number", "description": "Failed verification attempts count" },
+        "deliveryStatus": {
+          "type": "string",
+          "enum": ["unverified", "in_progress", "verified"],
+          "description": "Verified service delivery lifecycle state"
+        },
+        "isVerifiedDelivery": { "type": "boolean", "description": "Whether service delivery was successfully verified with code" },
+        "verifiedAt": { "type": "string", "description": "Timestamp when service delivery was verified by customer" },
+        "workStartedAt": { "type": "string", "description": "ISO timestamp when Arrival OTP was verified and work timer started" },
+        "workEndedAt": { "type": "string", "description": "ISO timestamp when work was completed by service professional" },
+        "workDurationMinutes": { "type": "number", "description": "Total duration in minutes calculated from server timestamps" },
+        "workStatus": { "type": "string", "enum": ["not_started", "in_progress", "completed"], "description": "Service work lifecycle status" },
+        "baseAmount": { "type": "number", "description": "Original base service charge amount" },
+        "extraCharges": { "type": "array", "description": "List of proposed and approved extra service or material charges" },
+        "finalBill": { "type": "object", "description": "Immutable server-calculated final bill snapshot" },
+        "finalAmount": { "type": "number", "description": "Authoritative final payable amount after work completion" },
+        "rescheduledAt": { "type": "string", "description": "Timestamp when booking date was rescheduled" },
+        "rescheduleCount": { "type": "number", "description": "Number of times booking was rescheduled" },
+        "createdAt": { "type": "string", "description": "Timestamp created" },
+        "updatedAt": { "type": "string", "description": "Timestamp updated" }
+      },
+      "required": ["id", "customerId", "serviceId", "serviceName", "scheduledDate", "scheduledTime", "address", "amount", "status"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Payment record for completed or online bookings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Payment record ID" },
+        "bookingId": { "type": "string", "description": "Booking ID" },
+        "customerId": { "type": "string", "description": "Customer ID" },
+        "amount": { "type": "number", "description": "Payment amount" },
+        "method": { "type": "string", "enum": ["cash", "upi", "card", "wallet"], "description": "Method of payment" },
+        "status": { "type": "string", "enum": ["pending", "completed", "failed", "refunded"], "description": "Status" },
+        "transactionReference": { "type": "string", "description": "Payment gateway or receipt reference" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["id", "bookingId", "amount", "method", "status"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Platform ledger of debits, credits, commission, and settlements",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Transaction ID" },
+        "userId": { "type": "string", "description": "User / entity ID" },
+        "role": { "type": "string", "description": "Role of recipient/payer" },
+        "amount": { "type": "number", "description": "Amount (+credit, -debit)" },
+        "type": { "type": "string", "enum": ["credit", "debit"], "description": "Credit or debit" },
+        "purpose": { "type": "string", "description": "e.g., booking_payout, platform_commission, topup, withdrawal" },
+        "bookingId": { "type": "string", "description": "Associated booking ID" },
+        "status": { "type": "string", "enum": ["success", "pending", "failed"], "description": "Status" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["id", "userId", "amount", "type", "purpose"]
+    },
+    "Wallet": {
+      "title": "Wallet",
+      "description": "In-app wallet balance for professional, partner, or customer",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Wallet ID (matches userId)" },
+        "userId": { "type": "string", "description": "Owner user ID" },
+        "balance": { "type": "number", "description": "Current wallet balance" },
+        "pendingBalance": { "type": "number", "description": "Unsettled or pending withdrawal balance" },
+        "totalEarned": { "type": "number", "description": "Lifetime earned" },
+        "totalWithdrawn": { "type": "number", "description": "Lifetime withdrawn" },
+        "updatedAt": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["id", "userId", "balance"]
+    },
+    "WalletTransaction": {
+      "title": "WalletTransaction",
+      "description": "Wallet log of credit/withdrawal requests",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Wallet transaction ID" },
+        "walletId": { "type": "string", "description": "Wallet ID / User ID" },
+        "amount": { "type": "number", "description": "Amount" },
+        "type": { "type": "string", "enum": ["credit", "withdrawal"], "description": "Type of movement" },
+        "description": { "type": "string", "description": "Description / reference" },
+        "status": { "type": "string", "enum": ["pending", "completed", "rejected"], "description": "Status" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["id", "walletId", "amount", "type", "status"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Customer reviews and star ratings for services and professionals",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Review ID" },
+        "bookingId": { "type": "string", "description": "Associated booking ID" },
+        "customerId": { "type": "string", "description": "Reviewer ID" },
+        "customerName": { "type": "string", "description": "Reviewer name" },
+        "serviceId": { "type": "string", "description": "Service ID" },
+        "serviceManId": { "type": "string", "description": "Service professional ID" },
+        "rating": { "type": "number", "description": "Star rating 1 to 5" },
+        "comment": { "type": "string", "description": "Review feedback" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["id", "bookingId", "customerId", "rating"]
+    },
+    "KycDocument": {
+      "title": "KycDocument",
+      "description": "Identity and trade verification documents submitted by service pros and partners",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "KYC doc record ID" },
+        "userId": { "type": "string", "description": "Applicant user ID" },
+        "userName": { "type": "string", "description": "Applicant full name" },
+        "role": { "type": "string", "description": "Applicant role" },
+        "docType": { "type": "string", "enum": ["aadhaar", "pan", "license", "gst_certificate", "trade_cert"], "description": "Type of document" },
+        "docNumber": { "type": "string", "description": "Document identification number" },
+        "fileUrl": { "type": "string", "description": "Uploaded document image/PDF" },
+        "status": { "type": "string", "enum": ["pending", "verified", "rejected"], "description": "Admin approval status" },
+        "adminNotes": { "type": "string", "description": "Reason for rejection or approval note" },
+        "submittedAt": { "type": "string", "description": "Timestamp submitted" },
+        "reviewedAt": { "type": "string", "description": "Timestamp reviewed" }
+      },
+      "required": ["id", "userId", "docType", "docNumber", "status"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Chat messages between customer and service professional regarding a booking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Message ID" },
+        "bookingId": { "type": "string", "description": "Booking thread ID" },
+        "senderId": { "type": "string", "description": "Sender User ID" },
+        "senderName": { "type": "string", "description": "Sender display name" },
+        "receiverId": { "type": "string", "description": "Receiver User ID" },
+        "text": { "type": "string", "description": "Message body" },
+        "timestamp": { "type": "string", "description": "Timestamp" },
+        "read": { "type": "boolean", "description": "Read status" }
+      },
+      "required": ["id", "bookingId", "senderId", "receiverId", "text"]
+    },
+    "WhatsAppLog": {
+      "title": "WhatsAppLog",
+      "description": "Audit log of automated WhatsApp booking confirmations and dispatch alerts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Log ID" },
+        "recipientPhone": { "type": "string", "description": "Target phone number" },
+        "recipientName": { "type": "string", "description": "Recipient name" },
+        "type": { "type": "string", "description": "Template or trigger type (e.g. booking_confirm, pro_dispatched)" },
+        "messageBody": { "type": "string", "description": "Message text delivered" },
+        "status": { "type": "string", "enum": ["sent", "delivered", "read", "failed"], "description": "Delivery status" },
+        "timestamp": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["id", "recipientPhone", "messageBody", "status"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "In-app notifications for booking alerts, status updates, and announcements",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Notification ID" },
+        "userId": { "type": "string", "description": "Recipient User ID" },
+        "title": { "type": "string", "description": "Notification title" },
+        "message": { "type": "string", "description": "Notification body" },
+        "type": { "type": "string", "description": "Type category (booking, payment, system)" },
+        "link": { "type": "string", "description": "Optional navigation link or bookingId" },
+        "read": { "type": "boolean", "description": "Whether read by user" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["id", "userId", "title", "message"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "Global HARDINKAAM system and platform configurations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Config key" },
+        "value": { "type": "string", "description": "Configuration value or serialized JSON" },
+        "description": { "type": "string", "description": "Description of setting" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["id", "value"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "System event audit log for security, verification, and actions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Audit ID" },
+        "userId": { "type": "string", "description": "Actor user ID" },
+        "userEmail": { "type": "string", "description": "Actor user email" },
+        "action": { "type": "string", "description": "Action performed" },
+        "details": { "type": "string", "description": "Contextual details" },
+        "timestamp": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["id", "action", "timestamp"]
+    },
+    "ThemeSetting": {
+      "title": "ThemeSetting",
+      "description": "Festival Theme Engine active configuration and settings",
+      "type": "object",
+      "properties": {
+        "activeThemeId": { "type": "string", "description": "Active theme ID (default, holi, ganesh_chaturthi, navratri, diwali, christmas)" },
+        "updatedAt": { "type": "string", "description": "Last updated ISO timestamp" },
+        "updatedBy": { "type": "string", "description": "Admin name who updated theme" },
+        "updatedByEmail": { "type": "string", "description": "Admin email" }
+      },
+      "required": ["activeThemeId", "updatedAt"]
+    },
+    "ServicemanPayout": {
+      "title": "ServicemanPayout",
+      "description": "Technician payout disbursements processed with commission and tax deductions",
+      "type": "object",
+      "properties": {
+        "payoutRazorpayId": { "type": "string", "description": "Razorpay payout reference ID" },
+        "bookingId": { "type": "string", "description": "Associated booking ID" },
+        "serviceManId": { "type": "string", "description": "Technician ID" },
+        "serviceManName": { "type": "string", "description": "Technician name" },
+        "grossAmount": { "type": "number", "description": "Total booking gross amount" },
+        "companyCommissionRate": { "type": "number", "description": "Company commission percentage (15%)" },
+        "companyServiceCharge": { "type": "number", "description": "Company service fee deducted" },
+        "taxRate": { "type": "number", "description": "Tax percentage (5%)" },
+        "taxDeduction": { "type": "number", "description": "Tax deducted" },
+        "netPayoutAmount": { "type": "number", "description": "Net disbursed amount" },
+        "status": { "type": "string", "enum": ["paid", "pending", "failed"], "description": "Payout status" },
+        "processedAt": { "type": "string", "description": "Disbursement timestamp" }
+      },
+      "required": ["payoutRazorpayId", "bookingId", "serviceManId", "grossAmount", "netPayoutAmount", "status"]
+    },
+    "RazorpayOrder": {
+      "title": "RazorpayOrder",
+      "description": "Order records created via Razorpay API for registrations or bookings",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string", "description": "Razorpay Order ID" },
+        "amount": { "type": "number", "description": "Amount in paise" },
+        "currency": { "type": "string", "description": "Currency code (INR)" },
+        "receipt": { "type": "string", "description": "Receipt reference" },
+        "status": { "type": "string", "description": "Order status" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["orderId", "amount", "currency", "status"]
+    },
+    "WebhookEvent": {
+      "title": "WebhookEvent",
+      "description": "Processed Razorpay Webhook Event for idempotency and audit",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Webhook Event ID" },
+        "event": { "type": "string", "description": "Event name e.g. payment.authorized, payout.processed" },
+        "processedAt": { "type": "string", "description": "Timestamp of webhook receipt and execution" },
+        "status": { "type": "string", "description": "Processing status" }
+      },
+      "required": ["id", "event"]
+    },
+    "DeploymentVersion": {
+      "title": "DeploymentVersion",
+      "description": "Production website deployment release metadata, build logs, and version lifecycle",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique deployment record ID" },
+        "version": { "type": "string", "description": "Semantic version e.g. v1.0.3" },
+        "status": { "type": "string", "enum": ["LIVE", "PREVIOUS", "FAILED", "ROLLED_BACK", "BUILDING", "DEPLOYING"], "description": "Deployment live state" },
+        "buildStatus": { "type": "string", "enum": ["SUCCESS", "FAILED", "IN_PROGRESS", "QUEUED"], "description": "Compilation status" },
+        "deploymentStatus": { "type": "string", "enum": ["LIVE", "FAILED", "PREVIOUS", "IN_PROGRESS", "ROLLED_BACK"], "description": "Hosting release state" },
+        "uploadedBy": { "type": "string", "description": "Admin email or UID who initiated deployment" },
+        "uploadedAt": { "type": "string", "description": "ISO timestamp of upload" },
+        "deploymentTime": { "type": "string", "description": "Timestamp or duration of deployment completion" },
+        "zipFileName": { "type": "string", "description": "Name of the uploaded ZIP archive" },
+        "zipFileSize": { "type": "number", "description": "Size in bytes" },
+        "buildLog": { "type": "string", "description": "Production build execution output logs" },
+        "deploymentLog": { "type": "string", "description": "Firebase Hosting deployment logs" },
+        "errorMessage": { "type": "string", "description": "Error details if failed" },
+        "siteUrl": { "type": "string", "description": "Target production website URL" },
+        "releaseId": { "type": "string", "description": "Hosting release ID" },
+        "isActiveLive": { "type": "boolean", "description": "Whether this version is current production live" }
+      },
+      "required": ["id", "version", "status", "buildStatus", "deploymentStatus", "uploadedBy", "uploadedAt"]
+    },
+    "FranchisePartner": {
+      "title": "FranchisePartner",
+      "description": "Franchise Partner & District Administrator profile, operational permissions, assigned territory, and district settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Document UID of the franchise partner" },
+        "franchisePartnerId": { "type": "string", "description": "Unique partner UID identifier" },
+        "franchiseCode": { "type": "string", "description": "Algorithmic franchise code e.g. HDK-GWL-001" },
+        "name": { "type": "string", "description": "Franchise partner full name" },
+        "email": { "type": "string", "description": "Official login and contact email" },
+        "phone": { "type": "string", "description": "Official helpline phone" },
+        "assignedDistrictId": { "type": "string", "description": "Standardized district ID e.g. gwalior, bhopal" },
+        "assignedDistrictName": { "type": "string", "description": "Standardized district display name e.g. Gwalior" },
+        "stateName": { "type": "string", "description": "State name e.g. Madhya Pradesh" },
+        "status": { "type": "string", "enum": ["ACTIVE", "SUSPENDED", "DISABLED", "PENDING"], "description": "Franchise partner status" },
+        "permissions": { "type": "object", "description": "Operational permissions" },
+        "officeAddress": { "type": "string", "description": "Registered local office address" },
+        "city": { "type": "string", "description": "District / City name" },
+        "pincodes": { "type": "array", "description": "List of covered postal pincodes" },
+        "districtSettings": { "type": "object", "description": "District helpline, operating hours, custom notices" },
+        "disabledServiceIds": { "type": "array", "description": "Services disabled in this district" },
+        "disabledCategoryIds": { "type": "array", "description": "Categories disabled in this district" },
+        "loginUsername": { "type": "string", "description": "Franchise partner login code" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last update timestamp" }
+      },
+      "required": ["id", "franchiseCode", "name", "email", "assignedDistrictId", "assignedDistrictName", "status"]
+    },
+    "ServiceTracking": {
+      "title": "ServiceTracking",
+      "description": "Live real-time location foundation record for active bookings",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string", "description": "Unique booking identifier" },
+        "customerId": { "type": "string", "description": "Customer user account ID" },
+        "servicemanId": { "type": "string", "description": "Assigned service professional ID" },
+        "status": {
+          "type": "string",
+          "enum": ["REQUESTED", "ASSIGNED", "ON_THE_WAY", "ARRIVED", "WORK_STARTED", "COMPLETED", "CANCELLED"],
+          "description": "Current tracking status lifecycle state"
+        },
+        "customerLocation": {
+          "type": "object",
+          "properties": {
+            "latitude": { "type": "number" },
+            "longitude": { "type": "number" },
+            "timestamp": { "type": "string" }
+          },
+          "description": "Customer live or pinned location"
+        },
+        "servicemanLocation": {
+          "type": "object",
+          "properties": {
+            "latitude": { "type": "number" },
+            "longitude": { "type": "number" },
+            "timestamp": { "type": "string" }
+          },
+          "description": "Service professional live device coordinates"
+        },
+        "destination": {
+          "type": "object",
+          "properties": {
+            "latitude": { "type": "number" },
+            "longitude": { "type": "number" },
+            "timestamp": { "type": "string" }
+          },
+          "description": "Service destination coordinates"
+        },
+        "etaSeconds": { "type": "number", "description": "Estimated time of arrival in seconds" },
+        "lastUpdatedAt": { "type": "string", "description": "ISO timestamp of last tracking update" }
+      },
+      "required": ["bookingId", "customerId", "servicemanId", "status", "lastUpdatedAt"]
+    },
+    "BookingAssignment": {
+      "title": "BookingAssignment",
+      "description": "Exclusive booking offer and assignment records dispatched to eligible ServiceMen",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Assignment identifier (asgn_{bookingId}_{serviceManId})" },
+        "bookingId": { "type": "string", "description": "Associated booking document ID" },
+        "serviceManId": { "type": "string", "description": "Target ServiceMan document ID" },
+        "serviceManName": { "type": "string", "description": "ServiceMan full name" },
+        "serviceManPhone": { "type": "string", "description": "ServiceMan contact phone" },
+        "district": { "type": "string", "description": "District or locality" },
+        "districtId": { "type": "string", "description": "District ID" },
+        "service": { "type": "string", "description": "Service title" },
+        "serviceId": { "type": "string", "description": "Service ID" },
+        "serviceCategory": { "type": "string", "description": "Category name" },
+        "categoryId": { "type": "string", "description": "Category ID" },
+        "amount": { "type": "number", "description": "Total booking cost" },
+        "scheduledDate": { "type": "string", "description": "Booking scheduled date" },
+        "scheduledTime": { "type": "string", "description": "Booking scheduled time" },
+        "status": { "type": "string", "enum": ["offered", "accepted", "rejected", "expired", "closed"], "description": "Offer status" },
+        "createdAt": { "type": "string", "description": "ISO timestamp created" },
+        "expiresAt": { "type": "string", "description": "ISO timestamp expires" },
+        "notificationStatus": { "type": "string", "enum": ["pending", "sent", "failed", "not_registered"], "description": "FCM push status" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp updated" }
+      },
+      "required": ["id", "bookingId", "serviceManId", "status"]
+    },
+    "DeviceToken": {
+      "title": "DeviceToken",
+      "description": "Service professional FCM push notification device registration token",
+      "type": "object",
+      "properties": {
+        "token": { "type": "string", "description": "FCM registration device token" },
+        "userId": { "type": "string", "description": "ServiceMan or User account ID" },
+        "role": { "type": "string", "description": "Account role" },
+        "deviceType": { "type": "string", "description": "Device platform (web, android, ios)" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp refreshed" },
+        "createdAt": { "type": "string", "description": "ISO timestamp created" }
+      },
+      "required": ["token", "userId"]
+    },
+    "BookingOffer": {
+      "title": "BookingOffer",
+      "description": "Secure actionable booking offer dispatched exclusively to eligible Service Professionals",
+      "type": "object",
+      "properties": {
+        "offerId": { "type": "string", "description": "Unique offer ID" },
+        "bookingId": { "type": "string", "description": "Linked booking ID" },
+        "serviceManId": { "type": "string", "description": "Service professional UID" },
+        "districtId": { "type": "string", "description": "Booking district ID" },
+        "serviceId": { "type": "string", "description": "Requested service ID" },
+        "status": {
+          "type": "string",
+          "enum": ["PENDING", "ACCEPTED", "REJECTED", "EXPIRED", "CANCELLED"],
+          "description": "Offer status"
+        },
+        "createdAt": { "type": "string", "description": "ISO timestamp created" },
+        "expiresAt": { "type": "string", "description": "ISO timestamp expiry" },
+        "respondedAt": { "type": "string", "description": "ISO timestamp responded" }
+      },
+      "required": ["offerId", "bookingId", "serviceManId", "districtId", "serviceId", "status", "createdAt", "expiresAt"]
+    }
+  },
+  "firestore": {
+    "/franchise_partners/{partnerId}": {
+      "schema": "FranchisePartner",
+      "description": "Franchise Partner & District Administrator records"
+    },
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile data and role specification"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Service categories"
+    },
+    "/services/{serviceId}": {
+      "schema": "Service",
+      "description": "Available services"
+    },
+    "/service_men/{serviceManId}": {
+      "schema": "ServiceMan",
+      "description": "Service professional records and availability"
+    },
+    "/business_partners/{partnerId}": {
+      "schema": "BusinessPartner",
+      "description": "Business partner records"
+    },
+    "/bookings/{bookingId}": {
+      "schema": "Booking",
+      "description": "Booking records"
+    },
+    "/payments/{paymentId}": {
+      "schema": "Payment",
+      "description": "Payment records"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Platform transactions"
+    },
+    "/wallets/{walletId}": {
+      "schema": "Wallet",
+      "description": "User and professional wallets"
+    },
+    "/wallet_transactions/{transId}": {
+      "schema": "WalletTransaction",
+      "description": "Wallet transactions"
+    },
+    "/reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "Customer service reviews"
+    },
+    "/kyc_documents/{docId}": {
+      "schema": "KycDocument",
+      "description": "KYC document submissions"
+    },
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Booking communication messages"
+    },
+    "/whatsapp_logs/{logId}": {
+      "schema": "WhatsAppLog",
+      "description": "WhatsApp dispatch and notification audit"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User notifications"
+    },
+    "/admin_alerts/{alertId}": {
+      "schema": "AdminAlert",
+      "description": "Administrative real-time alerts for agreements and partner activation milestones"
+    },
+    "/settings/{settingId}": {
+      "schema": "Setting",
+      "description": "Platform settings"
+    },
+    "/audit_logs/{auditId}": {
+      "schema": "AuditLog",
+      "description": "Admin audit logs"
+    },
+    "/themeSettings/{docId}": {
+      "schema": "ThemeSetting",
+      "description": "Global festival theme configuration"
+    },
+    "/serviceman_payouts/{payoutId}": {
+      "schema": "ServicemanPayout",
+      "description": "Service professional split payout records"
+    },
+    "/razorpay_orders/{orderId}": {
+      "schema": "RazorpayOrder",
+      "description": "Razorpay order tracking records"
+    },
+    "/webhook_events/{eventId}": {
+      "schema": "WebhookEvent",
+      "description": "Razorpay webhook idempotency and audit logs"
+    },
+    "/deploymentVersions/{versionId}": {
+      "schema": "DeploymentVersion",
+      "description": "Website deployment history, version metadata, and production release status"
+    },
+    "/serviceTracking/{bookingId}": {
+      "schema": "ServiceTracking",
+      "description": "Live real-time location tracking records for authorized active bookings"
+    },
+    "/booking_assignments/{assignmentId}": {
+      "schema": "BookingAssignment",
+      "description": "Exclusive booking offers and assignment dispatches for eligible service professionals"
+    },
+    "/device_tokens/{tokenId}": {
+      "schema": "DeviceToken",
+      "description": "FCM device registration tokens for push notifications"
+    },
+    "/booking_offers/{offerId}": {
+      "schema": "BookingOffer",
+      "description": "Exclusive booking offers and alerts for eligible service professionals"
+    }
+  }
+}

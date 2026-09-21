@@ -1,0 +1,194 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // =========================================================================
+    // AUTHENTICATION & ROLE HELPERS
+    // =========================================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'deepakbuildconbhopal@gmail.com' ||
+        request.auth.token.email == 'admin@hardinkaam.in' ||
+        request.auth.token.email == 'admin@deepakbuildcon.com' ||
+        request.auth.token.email == 'superadmin@hardinkaam.in'
+      );
+    }
+
+    // =========================================================================
+    // CONTENT TYPE & SECURITY VALIDATION
+    // Sensitive uploads strictly permit only PDF, JPG, JPEG, PNG
+    // Executables, scripts (.js, .html, .exe, .sh, .bat, etc.) are strictly rejected
+    // =========================================================================
+
+    function isAllowedDocumentType() {
+      return request.resource.contentType in [
+        'application/pdf',
+        'image/jpeg',
+        'image/jpg',
+        'image/png'
+      ];
+    }
+
+    function isAllowedImageType() {
+      return request.resource.contentType in [
+        'image/jpeg',
+        'image/jpg',
+        'image/png',
+        'image/webp',
+        'image/svg+xml'
+      ];
+    }
+
+    // =========================================================================
+    // DEFAULT DENY
+    // All unmatched paths are strictly blocked from public & unauthorized access
+    // =========================================================================
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // 1. FRANCHISE KYC DOCUMENTS
+    // Gumasta, GST, Aadhaar, Electricity Bill, Trade Licenses
+    // Partner can access/upload ONLY their own KYC documents
+    // Super Admin can review/access all KYC documents
+    // Unauthenticated & unrelated users have NO access
+    // Max size: 15MB. Only PDF, JPG, JPEG, PNG
+    // =========================================================================
+    match /franchise_kyc/{partnerId}/{fileName} {
+      allow read: if isOwner(partnerId) || isSuperAdmin();
+      allow write: if (isOwner(partnerId) || isSuperAdmin()) &&
+                     isAllowedDocumentType() &&
+                     request.resource.size <= 15 * 1024 * 1024;
+    }
+
+    match /franchise_kyc_documents/{partnerId}/{fileName} {
+      allow read: if isOwner(partnerId) || isSuperAdmin();
+      allow write: if (isOwner(partnerId) || isSuperAdmin()) &&
+                     isAllowedDocumentType() &&
+                     request.resource.size <= 15 * 1024 * 1024;
+    }
+
+    // =========================================================================
+    // 2. CUSTOMER & SERVICE PROFESSIONAL PRIVATE DOCUMENTS
+    // Private identity & registration documents (Aadhaar, PAN, Licenses, Passbook)
+    // Owner can access ONLY their own files. Super Admin can access for verification.
+    // Unauthenticated & unrelated users have NO access. Never publicly readable.
+    // Max size: 15MB. Only PDF, JPG, JPEG, PNG
+    // =========================================================================
+    match /kyc/{userId}/{fileName} {
+      allow read: if isOwner(userId) || isSuperAdmin();
+      allow write: if (isOwner(userId) || isSuperAdmin()) &&
+                     isAllowedDocumentType() &&
+                     request.resource.size <= 15 * 1024 * 1024;
+    }
+
+    match /documents/{userId}/{fileName} {
+      allow read: if isOwner(userId) || isSuperAdmin();
+      allow write: if (isOwner(userId) || isSuperAdmin()) &&
+                     isAllowedDocumentType() &&
+                     request.resource.size <= 15 * 1024 * 1024;
+    }
+
+    // =========================================================================
+    // 3. FRANCHISE AGREEMENT DOCUMENTS
+    // Official signed franchise agreement documents
+    // Partner can access ONLY their own agreement documents. Super Admin accesses all.
+    // Other users cannot access. Preserves View/Download/Print functionality.
+    // Max size: 25MB. Only PDF, JPG, JPEG, PNG
+    // =========================================================================
+    match /franchise_agreements/{partnerId}/{fileName} {
+      allow read: if isOwner(partnerId) || isSuperAdmin();
+      allow write: if (isOwner(partnerId) || isSuperAdmin()) &&
+                     isAllowedDocumentType() &&
+                     request.resource.size <= 25 * 1024 * 1024;
+    }
+
+    // =========================================================================
+    // 4. USER AVATARS & PROFILE PHOTOS
+    // Publicly readable for service catalog, reviews, and app navigation
+    // Owner or Super Admin can upload. Max size: 5MB. Images only.
+    // =========================================================================
+    match /avatars/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if (isOwner(userId) || isSuperAdmin()) &&
+                     isAllowedImageType() &&
+                     request.resource.size <= 5 * 1024 * 1024;
+    }
+
+    // =========================================================================
+    // 5. PUBLIC ASSETS & CATALOG IMAGES
+    // Category images, service images, public banners, logos, PWA assets
+    // Publicly readable for web clients. Super Admin write only.
+    // Images only. Max size: 10MB.
+    // =========================================================================
+    match /public/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSuperAdmin() &&
+                     isAllowedImageType() &&
+                     request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    match /categories/{fileName} {
+      allow read: if true;
+      allow write: if isSuperAdmin() &&
+                     isAllowedImageType() &&
+                     request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    match /services/{fileName} {
+      allow read: if true;
+      allow write: if isSuperAdmin() &&
+                     isAllowedImageType() &&
+                     request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    match /banners/{fileName} {
+      allow read: if true;
+      allow write: if isSuperAdmin() &&
+                     isAllowedImageType() &&
+                     request.resource.size <= 15 * 1024 * 1024;
+    }
+
+    match /branding/{fileName} {
+      allow read: if true;
+      allow write: if isSuperAdmin() &&
+                     isAllowedImageType() &&
+                     request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    match /district_assets/{districtId}/{fileName} {
+      allow read: if true;
+      allow write: if isSuperAdmin() &&
+                     request.resource.size <= 50 * 1024 * 1024;
+    }
+
+    // =========================================================================
+    // 6. BOOKING ATTACHMENTS & CHAT MEDIA
+    // Photos & service completion snapshots
+    // Accessible only to authenticated users. Size limit: 10MB
+    // =========================================================================
+    match /bookings/{bookingId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() &&
+                     (isAllowedImageType() || isAllowedDocumentType()) &&
+                     request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    match /messages/{conversationId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() &&
+                     isAllowedImageType() &&
+                     request.resource.size <= 5 * 1024 * 1024;
+    }
+  }
+}

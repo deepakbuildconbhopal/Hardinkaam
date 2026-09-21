@@ -1,0 +1,8 @@
+# HARDINKAAM - robots.txt
+User-agent: *
+Allow: /
+Allow: /#categories
+Allow: /#franchise
+
+# Sitemaps
+Sitemap: https://hardinkaam.com/sitemap.xml

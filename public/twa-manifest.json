@@ -1,0 +1,52 @@
+{
+  "packageId": "com.hardinkaam.app",
+  "host": "hardinkaam.com",
+  "name": "HARDINKAAM",
+  "launcherName": "HARDINKAAM",
+  "display": "standalone",
+  "themeColor": "#ea580c",
+  "themeColorDark": "#0c0a09",
+  "navigationColor": "#ea580c",
+  "navigationColorDark": "#0c0a09",
+  "backgroundColor": "#ffffff",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://hardinkaam.com/pwa-512x512.png",
+  "maskableIconUrl": "https://hardinkaam.com/pwa-maskable-512x512.png",
+  "appVersionName": "1.0.0",
+  "appVersionCode": 1,
+  "shortcuts": [
+    {
+      "name": "Book Electrician",
+      "short_name": "Electrician",
+      "url": "/#electrician",
+      "icon": "https://hardinkaam.com/pwa-192x192.png"
+    },
+    {
+      "name": "Book Plumber",
+      "short_name": "Plumber",
+      "url": "/#plumber",
+      "icon": "https://hardinkaam.com/pwa-192x192.png"
+    },
+    {
+      "name": "Franchise Portal",
+      "short_name": "Franchise",
+      "url": "/#franchise",
+      "icon": "https://hardinkaam.com/pwa-192x192.png"
+    }
+  ],
+  "webManifestUrl": "https://hardinkaam.com/manifest.webmanifest",
+  "features": {
+    "playBilling": {
+      "enabled": false
+    },
+    "locationDelegation": {
+      "enabled": true
+    }
+  },
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false
+}

@@ -1,0 +1,1457 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // CORE AUTHENTICATION & ROLE IDENTIFICATION HELPERS
+    // =========================================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function hasUserDoc() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasFranchisePartnerDoc() {
+      return exists(/databases/$(database)/documents/franchise_partners/$(request.auth.uid));
+    }
+
+    function getFranchisePartnerData() {
+      return get(/databases/$(database)/documents/franchise_partners/$(request.auth.uid)).data;
+    }
+
+    // Super Admin: Platform root administrator
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'deepakbuildconbhopal@gmail.com' ||
+        request.auth.token.email == 'admin@hardinkaam.in' ||
+        (hasUserDoc() && (
+          getUserData().role == 'admin' ||
+          getUserData().role == 'super_admin' ||
+          getUserData().email == 'deepakbuildconbhopal@gmail.com' ||
+          getUserData().email == 'admin@hardinkaam.in'
+        ))
+      );
+    }
+
+    // Franchise Admin / District Partner Authorization Gate
+    // Requires an authorized, active, and approved franchise relationship with an assigned district.
+    // Suspended, pending, terminated, rejected, or inactive franchises are strictly denied.
+    function isFranchiseAdmin() {
+      return isSignedIn() && (
+        (hasFranchisePartnerDoc() && (
+          getFranchisePartnerData().status in ['ACTIVE', 'active', 'APPROVED', 'approved'] &&
+          getFranchisePartnerData().assignedDistrictId != null &&
+          getFranchisePartnerData().assignedDistrictId != '' &&
+          (
+            !('agreementStatus' in getFranchisePartnerData()) ||
+            !(getFranchisePartnerData().agreementStatus in ['TERMINATED', 'terminated', 'EXPIRED', 'expired', 'REJECTED', 'rejected', 'CANCELLED', 'cancelled'])
+          ) &&
+          (
+            !('kycStatus' in getFranchisePartnerData()) ||
+            !(getFranchisePartnerData().kycStatus in ['REJECTED', 'rejected'])
+          )
+        )) ||
+        (hasUserDoc() && (
+          (getUserData().role == 'franchise_admin' || getUserData().role == 'FRANCHISE_ADMIN') &&
+          (!('status' in getUserData()) || getUserData().status in ['active', 'ACTIVE', 'approved', 'APPROVED']) &&
+          (!('accountStatus' in getUserData()) || getUserData().accountStatus in ['active', 'ACTIVE', 'approved', 'APPROVED']) &&
+          (
+            ('assignedDistrictId' in getUserData() && getUserData().assignedDistrictId != null && getUserData().assignedDistrictId != '') ||
+            ('districtId' in getUserData() && getUserData().districtId != null && getUserData().districtId != '')
+          )
+        ))
+      );
+    }
+
+    // Business Partner Role Check
+    function isBusinessPartner() {
+      return isSignedIn() && (
+        (hasUserDoc() && (
+          getUserData().role == 'business_partner' ||
+          getUserData().role == 'BUSINESS_PARTNER'
+        )) ||
+        exists(/databases/$(database)/documents/business_partners/$(request.auth.uid))
+      );
+    }
+
+    // Service Professional Role Check
+    function isServiceProfessional() {
+      return isSignedIn() && (
+        (hasUserDoc() && (
+          getUserData().role == 'service_man' ||
+          getUserData().role == 'SERVICE_PROFESSIONAL'
+        )) ||
+        exists(/databases/$(database)/documents/service_men/$(request.auth.uid)) ||
+        exists(/databases/$(database)/documents/serviceMen/$(request.auth.uid))
+      );
+    }
+
+    // =========================================================================
+    // DISTRICT ISOLATION SECURITY GATES
+    // =========================================================================
+
+    // Fetches the authenticated user's assigned district ID (e.g., 'gwalior', 'bhopal')
+    function getMyDistrictId() {
+      return hasFranchisePartnerDoc() && 'assignedDistrictId' in getFranchisePartnerData()
+        ? getFranchisePartnerData().assignedDistrictId
+        : hasUserDoc() && 'assignedDistrictId' in getUserData()
+        ? getUserData().assignedDistrictId
+        : hasUserDoc() && 'districtId' in getUserData()
+        ? getUserData().districtId
+        : '';
+    }
+
+    // Fetches the authenticated user's assigned district name (e.g., 'Gwalior', 'Bhopal')
+    function getMyDistrictName() {
+      return hasFranchisePartnerDoc() && 'assignedDistrictName' in getFranchisePartnerData()
+        ? getFranchisePartnerData().assignedDistrictName
+        : hasUserDoc() && 'assignedDistrictName' in getUserData()
+        ? getUserData().assignedDistrictName
+        : hasUserDoc() && 'districtName' in getUserData()
+        ? getUserData().districtName
+        : hasUserDoc() && 'city' in getUserData()
+        ? getUserData().city
+        : '';
+    }
+
+    // Strictly verifies whether a document belongs ONLY to the Franchise Partner's assigned district
+    // Authoritative check based primarily on districtId / assignedDistrictId / franchisePartnerId
+    // Anti-escape: Must NEVER match if document explicitly belongs to another district
+    function isMyDistrictData(data) {
+      return isFranchiseAdmin() &&
+        (!('districtId' in data) || data.districtId == null || data.districtId == '' || data.districtId == getMyDistrictId()) &&
+        (!('assignedDistrictId' in data) || data.assignedDistrictId == null || data.assignedDistrictId == '' || data.assignedDistrictId == getMyDistrictId()) &&
+        (
+          // 1. Direct partner assignment UID (only when not for another district)
+          (data.franchisePartnerId != null && (
+            data.franchisePartnerId == request.auth.uid ||
+            (hasFranchisePartnerDoc() && data.franchisePartnerId == getFranchisePartnerData().id)
+          )) ||
+          // 2. Authoritative districtId match
+          (data.districtId != null && getMyDistrictId() != '' && data.districtId == getMyDistrictId()) ||
+          // 3. Authoritative assignedDistrictId match
+          (data.assignedDistrictId != null && getMyDistrictId() != '' && data.assignedDistrictId == getMyDistrictId()) ||
+          // 4. Fallback: Only when explicit districtId / assignedDistrictId are absent, check districtName/city against partner's assigned district
+          (
+            !('districtId' in data) &&
+            !('assignedDistrictId' in data) &&
+            getMyDistrictName() != '' &&
+            (
+              (data.districtName != null && (data.districtName == getMyDistrictName() || data.districtName == getMyDistrictId())) ||
+              (data.assignedDistrictName != null && (data.assignedDistrictName == getMyDistrictName() || data.assignedDistrictName == getMyDistrictId())) ||
+              (data.city != null && (data.city == getMyDistrictName() || data.city == getMyDistrictId()))
+            )
+          )
+        );
+    }
+
+    // Video Call Participant Verification Helper
+    function isVideoCallParticipant(data) {
+      return isSignedIn() && (
+        (data.hostId != null && data.hostId == request.auth.uid) ||
+        (data.participantId != null && data.participantId == request.auth.uid) ||
+        (data.customerId != null && data.customerId == request.auth.uid) ||
+        (data.serviceManId != null && data.serviceManId == request.auth.uid) ||
+        (data.partnerId != null && data.partnerId == request.auth.uid) ||
+        (data.userId != null && data.userId == request.auth.uid) ||
+        ('participants' in data && data.participants is list && request.auth.uid in data.participants)
+      );
+    }
+
+    // =========================================================================
+    // DEFAULT CATCH-ALL: DENY ALL
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // USERS COLLECTION
+    // Customer, Service Professional, Business Partner, Franchise Admin, Super Admin
+    // =========================================================================
+    match /users/{userId} {
+      // Owner or Super Admin can read full profile.
+      // Franchise Admin can read users in their assigned district.
+      // Basic info is accessible for booking / contact lookup.
+      allow read: if isSignedIn() && (
+        isOwner(userId) ||
+        isSuperAdmin() ||
+        isMyDistrictData(resource.data) ||
+        resource.data.role == 'service_man' ||
+        resource.data.role == 'business_partner'
+      );
+      
+      // User can create their own document on registration (cannot escalate role or privileges)
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isOwner(userId) &&
+          // Cannot self-assign administrative roles
+          (!('role' in request.resource.data) || request.resource.data.role in ['customer', 'service_man', 'business_partner']) &&
+          // Admin & Super Admin flags forbidden
+          (!('isAdmin' in request.resource.data) || request.resource.data.isAdmin == false) &&
+          (!('isSuperAdmin' in request.resource.data) || request.resource.data.isSuperAdmin == false) &&
+          // Verification & approval cannot be self-asserted
+          (!('isVerified' in request.resource.data) || request.resource.data.isVerified == false) &&
+          (!('verified' in request.resource.data) || request.resource.data.verified == false) &&
+          (!('isApproved' in request.resource.data) || request.resource.data.isApproved == false) &&
+          (!('approved' in request.resource.data) || request.resource.data.approved == false) &&
+          (!('approvalStatus' in request.resource.data) || request.resource.data.approvalStatus in ['pending', 'unverified', 'none']) &&
+          (!('kycStatus' in request.resource.data) || request.resource.data.kycStatus in ['pending', 'unverified', 'none']) &&
+          // Permissions & custom claims forbidden on self-creation
+          (!('permissions' in request.resource.data)) &&
+          (!('customClaims' in request.resource.data)) &&
+          // Plaintext password storage forbidden
+          (!('loginPassword' in request.resource.data)) &&
+          // Direct financial/wallet modification forbidden
+          (!('balance' in request.resource.data)) &&
+          (!('walletBalance' in request.resource.data)) &&
+          (!('earnings' in request.resource.data)) &&
+          (!('totalEarned' in request.resource.data))
+        )
+      );
+      
+      // Update rules: Super Admin manages all fields; Franchise Admin manages district users;
+      // Normal user can update only safe profile fields and cannot modify role, status, verification,
+      // districtId, assignedDistrictId, franchisePartnerId, businessPartnerId, permissions, or financial fields.
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data)) ||
+        (isOwner(userId) &&
+          // Role cannot be changed by user
+          ((!('role' in request.resource.data) && !('role' in resource.data)) || request.resource.data.role == resource.data.role) &&
+          // District assignment cannot be changed by user
+          ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId) &&
+          ((!('assignedDistrictId' in request.resource.data) && !('assignedDistrictId' in resource.data)) || request.resource.data.assignedDistrictId == resource.data.assignedDistrictId) &&
+          // Partner affiliations cannot be changed by user
+          ((!('franchisePartnerId' in request.resource.data) && !('franchisePartnerId' in resource.data)) || request.resource.data.franchisePartnerId == resource.data.franchisePartnerId) &&
+          ((!('businessPartnerId' in request.resource.data) && !('businessPartnerId' in resource.data)) || request.resource.data.businessPartnerId == resource.data.businessPartnerId) &&
+          // Permissions & claims cannot be changed by user
+          ((!('permissions' in request.resource.data) && !('permissions' in resource.data)) || request.resource.data.permissions == resource.data.permissions) &&
+          ((!('customClaims' in request.resource.data) && !('customClaims' in resource.data)) || request.resource.data.customClaims == resource.data.customClaims) &&
+          // Verification status cannot be escalated by user
+          ((!('isVerified' in request.resource.data) && !('isVerified' in resource.data)) || request.resource.data.isVerified == resource.data.isVerified) &&
+          ((!('verified' in request.resource.data) && !('verified' in resource.data)) || request.resource.data.verified == resource.data.verified) &&
+          ((!('isApproved' in request.resource.data) && !('isApproved' in resource.data)) || request.resource.data.isApproved == resource.data.isApproved) &&
+          ((!('approved' in request.resource.data) && !('approved' in resource.data)) || request.resource.data.approved == resource.data.approved) &&
+          ((!('approvalStatus' in request.resource.data) && !('approvalStatus' in resource.data)) || request.resource.data.approvalStatus == resource.data.approvalStatus) &&
+          ((!('kycStatus' in request.resource.data) && !('kycStatus' in resource.data)) || request.resource.data.kycStatus == resource.data.kycStatus || request.resource.data.kycStatus == 'pending') &&
+          // Account status: cannot unban or reactivate suspended/disabled account
+          ((!('accountStatus' in request.resource.data) && !('accountStatus' in resource.data)) || request.resource.data.accountStatus == resource.data.accountStatus) &&
+          ((!('status' in resource.data)) || resource.data.status in ['active', 'pending'] || request.resource.data.status == resource.data.status) &&
+          // Admin flags forbidden
+          (!('isAdmin' in request.resource.data) || request.resource.data.isAdmin == false) &&
+          (!('isSuperAdmin' in request.resource.data) || request.resource.data.isSuperAdmin == false) &&
+          // Financial fields cannot be tampered with
+          (!('balance' in request.resource.data) || request.resource.data.balance == resource.data.balance) &&
+          (!('walletBalance' in request.resource.data) || request.resource.data.walletBalance == resource.data.walletBalance) &&
+          (!('earnings' in request.resource.data) || request.resource.data.earnings == resource.data.earnings) &&
+          (!('totalEarned' in request.resource.data) || request.resource.data.totalEarned == resource.data.totalEarned) &&
+          (!('commission' in request.resource.data) || request.resource.data.commission == resource.data.commission) &&
+          // Plaintext password cannot be set or modified
+          (!('loginPassword' in request.resource.data) || request.resource.data.loginPassword == resource.data.loginPassword)
+        )
+      );
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // FRANCHISE PARTNERS (DISTRICT ADMINISTRATORS)
+    // Super Admin manages; Franchise Partner accesses only their own record
+    // =========================================================================
+    match /franchise_partners/{partnerId} {
+      // Super Admin can access all Franchise Partner data.
+      // Franchise Partner may access only their own private record.
+      // Complete document is NOT publicly readable to protect sensitive data:
+      // phone, email, KYC information, agreement information, internal status, financial info.
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        partnerId == request.auth.uid ||
+        resource.data.id == request.auth.uid ||
+        resource.data.franchisePartnerId == request.auth.uid ||
+        resource.data.email == request.auth.token.email
+      );
+
+      // Only Super Admin can onboard/create a new franchise partner
+      allow create: if isSuperAdmin();
+
+      // Super Admin has full update access.
+      // Franchise Partner can ONLY update permitted operational/agreement acceptance fields
+      allow update: if isSuperAdmin() || (
+        isFranchiseAdmin() && (
+          partnerId == request.auth.uid ||
+          resource.data.id == request.auth.uid ||
+          resource.data.franchisePartnerId == request.auth.uid ||
+          resource.data.email == request.auth.token.email
+        ) &&
+        // Protect critical immutable fields from being tampered with by franchise partner
+        request.resource.data.assignedDistrictId == resource.data.assignedDistrictId &&
+        request.resource.data.assignedDistrictName == resource.data.assignedDistrictName &&
+        request.resource.data.franchiseCode == resource.data.franchiseCode &&
+        request.resource.data.status == resource.data.status &&
+        ((!('permissions' in request.resource.data) && !('permissions' in resource.data)) || request.resource.data.permissions == resource.data.permissions) &&
+        (!('loginPassword' in request.resource.data) || request.resource.data.loginPassword == resource.data.loginPassword) &&
+        (!('charges' in request.resource.data) || request.resource.data.charges == resource.data.charges) &&
+        (!('commissionPercent' in request.resource.data) || request.resource.data.commissionPercent == resource.data.commissionPercent) &&
+        (!('profitPercentage' in request.resource.data) || request.resource.data.profitPercentage == resource.data.profitPercentage) &&
+        ((!('agreementApprovedBy' in request.resource.data) && !('agreementApprovedBy' in resource.data)) || request.resource.data.agreementApprovedBy == resource.data.agreementApprovedBy) &&
+        ((!('kycVerifiedBy' in request.resource.data) && !('kycVerifiedBy' in resource.data)) || request.resource.data.kycVerifiedBy == resource.data.kycVerifiedBy)
+      );
+
+      // Only Super Admin can delete a franchise partner
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // BOOKINGS COLLECTION
+    // Multi-tier access: Super Admin, District Franchise Admin, BP, Pro, Customer
+    // =========================================================================
+    match /bookings/{bookingId} {
+      // Super Admin: All bookings
+      // Customer: Only bookings where customerId == uid
+      // Service Pro: Only bookings assigned to them (serviceManId == uid)
+      // Business Partner: Only bookings belonging to their partner account (partnerId == uid)
+      // Franchise Admin: ONLY bookings in their assigned district (isMyDistrictData)
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.customerId == request.auth.uid ||
+        resource.data.serviceManId == request.auth.uid ||
+        resource.data.partnerId == request.auth.uid ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data))
+      );
+
+      // Customer can create booking. Super Admin & Franchise Admin can create for their district.
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          request.resource.data.customerId == request.auth.uid &&
+          request.resource.data.status in ['pending', 'confirmed'] &&
+          // User cannot set pre-settled or refunded financial fields
+          (!('refundStatus' in request.resource.data)) &&
+          (!('settlementStatus' in request.resource.data)) &&
+          (!('isSettled' in request.resource.data) || request.resource.data.isSettled == false) &&
+          (!('payoutStatus' in request.resource.data) || request.resource.data.payoutStatus in ['pending', 'unpaid', 'none'])
+        ) ||
+        (isFranchiseAdmin() && isMyDistrictData(request.resource.data))
+      );
+
+      // Updates restricted to involved parties & authorized district administrator with strict field protection
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+
+        // Franchise Admin updating booking in their authorized district (e.g., assigning technician or status)
+        (
+          isFranchiseAdmin() && isMyDistrictData(resource.data) &&
+          // District cannot be moved/reassigned to another district
+          ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId) &&
+          ((!('assignedDistrictId' in request.resource.data) && !('assignedDistrictId' in resource.data)) || request.resource.data.assignedDistrictId == resource.data.assignedDistrictId) &&
+          // Customer identity immutable
+          ((!('customerId' in request.resource.data) && !('customerId' in resource.data)) || request.resource.data.customerId == resource.data.customerId) &&
+          // Booking amount & payment IDs immutable
+          ((!('amount' in request.resource.data) && !('amount' in resource.data)) || request.resource.data.amount == resource.data.amount) &&
+          ((!('razorpayOrderId' in request.resource.data) && !('razorpayOrderId' in resource.data)) || request.resource.data.razorpayOrderId == resource.data.razorpayOrderId) &&
+          ((!('razorpayPaymentId' in request.resource.data) && !('razorpayPaymentId' in resource.data)) || request.resource.data.razorpayPaymentId == resource.data.razorpayPaymentId) &&
+          // Financial settlement/refund immutable
+          ((!('refundStatus' in request.resource.data) && !('refundStatus' in resource.data)) || request.resource.data.refundStatus == resource.data.refundStatus) &&
+          ((!('settlementStatus' in request.resource.data) && !('settlementStatus' in resource.data)) || request.resource.data.settlementStatus == resource.data.settlementStatus) &&
+          ((!('isSettled' in request.resource.data) && !('isSettled' in resource.data)) || request.resource.data.isSettled == resource.data.isSettled)
+        ) ||
+
+        // Customer legitimate booking updates (cancellation, reschedule date, reviews, OTP attempt updates)
+        (
+          resource.data.customerId == request.auth.uid &&
+          // Customer cannot tamper with customerId, technician, partner, or district
+          request.resource.data.customerId == resource.data.customerId &&
+          ((!('serviceManId' in request.resource.data) && !('serviceManId' in resource.data)) || request.resource.data.serviceManId == resource.data.serviceManId) &&
+          ((!('partnerId' in request.resource.data) && !('partnerId' in resource.data)) || request.resource.data.partnerId == resource.data.partnerId) &&
+          ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId) &&
+          // Financial amounts and payout/commission fields immutable by customer
+          request.resource.data.amount == resource.data.amount &&
+          ((!('finalAmount' in request.resource.data) && !('finalAmount' in resource.data)) || request.resource.data.finalAmount == resource.data.finalAmount) &&
+          ((!('companyCommission' in request.resource.data) && !('companyCommission' in resource.data)) || request.resource.data.companyCommission == resource.data.companyCommission) &&
+          ((!('profit' in request.resource.data) && !('profit' in resource.data)) || request.resource.data.profit == resource.data.profit) &&
+          ((!('servicemanPayoutAmount' in request.resource.data) && !('servicemanPayoutAmount' in resource.data)) || request.resource.data.servicemanPayoutAmount == resource.data.servicemanPayoutAmount) &&
+          ((!('payoutStatus' in request.resource.data) && !('payoutStatus' in resource.data)) || request.resource.data.payoutStatus == resource.data.payoutStatus) &&
+          // Payment IDs and payment status immutable by customer (must remain server/admin controlled)
+          ((!('paymentStatus' in request.resource.data) && !('paymentStatus' in resource.data)) || request.resource.data.paymentStatus == resource.data.paymentStatus) &&
+          ((!('razorpayOrderId' in request.resource.data) && !('razorpayOrderId' in resource.data)) || request.resource.data.razorpayOrderId == resource.data.razorpayOrderId) &&
+          ((!('razorpayPaymentId' in request.resource.data) && !('razorpayPaymentId' in resource.data)) || request.resource.data.razorpayPaymentId == resource.data.razorpayPaymentId) &&
+          ((!('refundStatus' in request.resource.data) && !('refundStatus' in resource.data)) || request.resource.data.refundStatus == resource.data.refundStatus) &&
+          ((!('settlementStatus' in request.resource.data) && !('settlementStatus' in resource.data)) || request.resource.data.settlementStatus == resource.data.settlementStatus) &&
+          ((!('isSettled' in request.resource.data) && !('isSettled' in resource.data)) || request.resource.data.isSettled == resource.data.isSettled) &&
+          ((!('assignedBy' in request.resource.data) && !('assignedBy' in resource.data)) || request.resource.data.assignedBy == resource.data.assignedBy) &&
+          // Customer cannot forge work verification timestamps or completion states
+          ((!('otpVerified' in request.resource.data) && !('otpVerified' in resource.data)) || request.resource.data.otpVerified == resource.data.otpVerified) &&
+          ((!('otpVerifiedAt' in request.resource.data) && !('otpVerifiedAt' in resource.data)) || request.resource.data.otpVerifiedAt == resource.data.otpVerifiedAt) &&
+          ((!('workStartedAt' in request.resource.data) && !('workStartedAt' in resource.data)) || request.resource.data.workStartedAt == resource.data.workStartedAt) &&
+          ((!('workEndedAt' in request.resource.data) && !('workEndedAt' in resource.data)) || request.resource.data.workEndedAt == resource.data.workEndedAt) &&
+          ((!('completedAt' in request.resource.data) && !('completedAt' in resource.data)) || request.resource.data.completedAt == resource.data.completedAt) &&
+          ((!('finalBill' in request.resource.data) && !('finalBill' in resource.data)) || request.resource.data.finalBill == resource.data.finalBill) &&
+          // Status transition guard: customer can cancel (when not completed), reschedule, or keep existing status
+          (
+            request.resource.data.status == resource.data.status ||
+            (request.resource.data.status == 'cancelled' && resource.data.status in ['pending', 'accepted', 'confirmed', 'on_the_way']) ||
+            request.resource.data.status in ['rescheduled']
+          )
+        ) ||
+
+        // Service Professional legitimate status progression and live service tracking
+        (
+          resource.data.serviceManId == request.auth.uid &&
+          // Immutable core relationship fields
+          request.resource.data.customerId == resource.data.customerId &&
+          request.resource.data.serviceManId == resource.data.serviceManId &&
+          ((!('partnerId' in request.resource.data) && !('partnerId' in resource.data)) || request.resource.data.partnerId == resource.data.partnerId) &&
+          ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId) &&
+          // Financial fields immutable by technician
+          request.resource.data.amount == resource.data.amount &&
+          ((!('finalAmount' in request.resource.data) && !('finalAmount' in resource.data)) || request.resource.data.finalAmount == resource.data.finalAmount) &&
+          ((!('companyCommission' in request.resource.data) && !('companyCommission' in resource.data)) || request.resource.data.companyCommission == resource.data.companyCommission) &&
+          ((!('profit' in request.resource.data) && !('profit' in resource.data)) || request.resource.data.profit == resource.data.profit) &&
+          ((!('servicemanPayoutAmount' in request.resource.data) && !('servicemanPayoutAmount' in resource.data)) || request.resource.data.servicemanPayoutAmount == resource.data.servicemanPayoutAmount) &&
+          ((!('payoutStatus' in request.resource.data) && !('payoutStatus' in resource.data)) || request.resource.data.payoutStatus == resource.data.payoutStatus) &&
+          // Technician cannot mark payment as successful, nor mark refund/settlement
+          ((!('paymentStatus' in request.resource.data) && !('paymentStatus' in resource.data)) || request.resource.data.paymentStatus == resource.data.paymentStatus) &&
+          ((!('razorpayOrderId' in request.resource.data) && !('razorpayOrderId' in resource.data)) || request.resource.data.razorpayOrderId == resource.data.razorpayOrderId) &&
+          ((!('razorpayPaymentId' in request.resource.data) && !('razorpayPaymentId' in resource.data)) || request.resource.data.razorpayPaymentId == resource.data.razorpayPaymentId) &&
+          ((!('refundStatus' in request.resource.data) && !('refundStatus' in resource.data)) || request.resource.data.refundStatus == resource.data.refundStatus) &&
+          ((!('settlementStatus' in request.resource.data) && !('settlementStatus' in resource.data)) || request.resource.data.settlementStatus == resource.data.settlementStatus) &&
+          ((!('isSettled' in request.resource.data) && !('isSettled' in resource.data)) || request.resource.data.isSettled == resource.data.isSettled) &&
+          ((!('assignedBy' in request.resource.data) && !('assignedBy' in resource.data)) || request.resource.data.assignedBy == resource.data.assignedBy) &&
+          // Technician cannot modify OTP, arrival OTP hash or verification timestamps directly
+          ((!('otp' in request.resource.data) && !('otp' in resource.data)) || request.resource.data.otp == resource.data.otp) &&
+          ((!('otpCreatedAt' in request.resource.data) && !('otpCreatedAt' in resource.data)) || request.resource.data.otpCreatedAt == resource.data.otpCreatedAt) &&
+          ((!('arrivalOtpHash' in request.resource.data) && !('arrivalOtpHash' in resource.data)) || request.resource.data.arrivalOtpHash == resource.data.arrivalOtpHash) &&
+          ((!('otpVerified' in request.resource.data) && !('otpVerified' in resource.data)) || request.resource.data.otpVerified == resource.data.otpVerified) &&
+          ((!('otpVerifiedAt' in request.resource.data) && !('otpVerifiedAt' in resource.data)) || request.resource.data.otpVerifiedAt == resource.data.otpVerifiedAt) &&
+          // Technician cannot forge or modify server-authoritative work timer or final bill snapshot directly
+          ((!('workStartedAt' in request.resource.data) && !('workStartedAt' in resource.data)) || request.resource.data.workStartedAt == resource.data.workStartedAt) &&
+          ((!('workEndedAt' in request.resource.data) && !('workEndedAt' in resource.data)) || request.resource.data.workEndedAt == resource.data.workEndedAt) &&
+          ((!('finalBill' in request.resource.data) && !('finalBill' in resource.data)) || request.resource.data.finalBill == resource.data.finalBill) &&
+          // Status transition guard: cannot modify terminal states; can only transition through active workflow
+          (
+            request.resource.data.status == resource.data.status ||
+            (
+              !(resource.data.status in ['completed', 'cancelled', 'rejected']) &&
+              request.resource.data.status in ['accepted', 'on_the_way', 'arriving', 'arrived', 'in_progress', 'completed', 'cancelled', 'service_man_unable_to_reach']
+            )
+          )
+        ) ||
+
+        // Business Partner updating their assigned bookings
+        (
+          resource.data.partnerId == request.auth.uid &&
+          request.resource.data.customerId == resource.data.customerId &&
+          request.resource.data.amount == resource.data.amount &&
+          ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId) &&
+          ((!('paymentStatus' in request.resource.data) && !('paymentStatus' in resource.data)) || request.resource.data.paymentStatus == resource.data.paymentStatus) &&
+          ((!('payoutStatus' in request.resource.data) && !('payoutStatus' in resource.data)) || request.resource.data.payoutStatus == resource.data.payoutStatus) &&
+          ((!('refundStatus' in request.resource.data) && !('refundStatus' in resource.data)) || request.resource.data.refundStatus == resource.data.refundStatus) &&
+          ((!('settlementStatus' in request.resource.data) && !('settlementStatus' in resource.data)) || request.resource.data.settlementStatus == resource.data.settlementStatus) &&
+          ((!('isSettled' in request.resource.data) && !('isSettled' in resource.data)) || request.resource.data.isSettled == resource.data.isSettled)
+        )
+      );
+
+      // Only Super Admin can hard delete a booking
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // SERVICE TRACKING (LIVE LOCATION FOUNDATION - serviceTracking/{bookingId})
+    // =========================================================================
+    match /serviceTracking/{bookingId} {
+      function isAuthorizedForServiceTracking(data) {
+        return isSignedIn() && (
+          isSuperAdmin() ||
+          isFranchiseAdmin() ||
+          request.auth.uid == data.customerId ||
+          request.auth.uid == data.servicemanId ||
+          (exists(/databases/$(database)/documents/service_men/$(data.servicemanId)) &&
+           get(/databases/$(database)/documents/service_men/$(data.servicemanId)).data.userId == request.auth.uid) ||
+          (exists(/databases/$(database)/documents/bookings/$(bookingId)) && (
+            get(/databases/$(database)/documents/bookings/$(bookingId)).data.customerId == request.auth.uid ||
+            get(/databases/$(database)/documents/bookings/$(bookingId)).data.serviceManId == request.auth.uid
+          ))
+        );
+      }
+
+      function isParentBookingStillActive() {
+        return !exists(/databases/$(database)/documents/bookings/$(bookingId)) ||
+          !(get(/databases/$(database)/documents/bookings/$(bookingId)).data.status in ['completed', 'cancelled', 'rejected']);
+      }
+
+      allow read: if isAuthorizedForServiceTracking(resource.data);
+
+      allow create: if isSignedIn() &&
+                    isAuthorizedForServiceTracking(request.resource.data) &&
+                    isParentBookingStillActive() &&
+                    request.resource.data.bookingId == bookingId &&
+                    request.resource.data.status in ['REQUESTED', 'ASSIGNED', 'ON_THE_WAY', 'ARRIVED', 'WORK_STARTED', 'COMPLETED', 'CANCELLED'];
+
+      allow update: if isAuthorizedForServiceTracking(resource.data) && (
+        isSuperAdmin() ||
+        (
+          // Only allow updates for an active booking lifecycle
+          resource.data.status in ['REQUESTED', 'ASSIGNED', 'ON_THE_WAY', 'ARRIVED', 'WORK_STARTED'] &&
+          isParentBookingStillActive() &&
+          request.resource.data.bookingId == resource.data.bookingId &&
+          request.resource.data.customerId == resource.data.customerId &&
+          request.resource.data.status in ['REQUESTED', 'ASSIGNED', 'ON_THE_WAY', 'ARRIVED', 'WORK_STARTED', 'COMPLETED', 'CANCELLED']
+        )
+      );
+
+      allow delete: if isSuperAdmin();
+
+      // Phase 13: Granular location history subcollection for audit and route replay
+      match /locationHistory/{pointId} {
+        allow read: if isSignedIn() && (
+          isSuperAdmin() ||
+          isFranchiseAdmin() ||
+          (exists(/databases/$(database)/documents/serviceTracking/$(bookingId)) &&
+           isAuthorizedForServiceTracking(get(/databases/$(database)/documents/serviceTracking/$(bookingId)).data)) ||
+          (exists(/databases/$(database)/documents/bookings/$(bookingId)) && (
+            get(/databases/$(database)/documents/bookings/$(bookingId)).data.customerId == request.auth.uid ||
+            get(/databases/$(database)/documents/bookings/$(bookingId)).data.serviceManId == request.auth.uid
+          ))
+        );
+
+        allow create: if isSignedIn() && (
+          isSuperAdmin() ||
+          (
+            isParentBookingStillActive() &&
+            request.resource.data.latitude is number &&
+            request.resource.data.longitude is number
+          )
+        );
+
+        allow update, delete: if isSuperAdmin();
+      }
+    }
+
+    // =========================================================================
+    // LIVE TRACKING (SPARK QUOTA OPTIMIZED - live_tracking/{bookingId})
+    // =========================================================================
+    match /live_tracking/{bookingId} {
+      function isAuthorizedForLiveTracking(data) {
+        return isSignedIn() && (
+          isSuperAdmin() ||
+          isFranchiseAdmin() ||
+          request.auth.uid == data.customerId ||
+          request.auth.uid == data.servicemanId ||
+          (exists(/databases/$(database)/documents/service_men/$(data.servicemanId)) &&
+           get(/databases/$(database)/documents/service_men/$(data.servicemanId)).data.userId == request.auth.uid) ||
+          (exists(/databases/$(database)/documents/bookings/$(bookingId)) && (
+            get(/databases/$(database)/documents/bookings/$(bookingId)).data.customerId == request.auth.uid ||
+            get(/databases/$(database)/documents/bookings/$(bookingId)).data.serviceManId == request.auth.uid
+          ))
+        );
+      }
+
+      function isParentBookingStillActive() {
+        return !exists(/databases/$(database)/documents/bookings/$(bookingId)) ||
+          !(get(/databases/$(database)/documents/bookings/$(bookingId)).data.status in ['completed', 'cancelled', 'rejected']);
+      }
+
+      allow read: if isAuthorizedForLiveTracking(resource.data);
+
+      allow create: if isSignedIn() &&
+                    isAuthorizedForLiveTracking(request.resource.data) &&
+                    isParentBookingStillActive() &&
+                    request.resource.data.bookingId == bookingId &&
+                    request.resource.data.status in ['REQUESTED', 'ASSIGNED', 'ON_THE_WAY', 'ARRIVED', 'WORK_STARTED', 'COMPLETED', 'CANCELLED'];
+
+      allow update: if isAuthorizedForLiveTracking(resource.data) && (
+        isSuperAdmin() ||
+        (
+          resource.data.status in ['REQUESTED', 'ASSIGNED', 'ON_THE_WAY', 'ARRIVED', 'WORK_STARTED'] &&
+          isParentBookingStillActive() &&
+          request.resource.data.bookingId == resource.data.bookingId &&
+          request.resource.data.customerId == resource.data.customerId &&
+          request.resource.data.status in ['REQUESTED', 'ASSIGNED', 'ON_THE_WAY', 'ARRIVED', 'WORK_STARTED', 'COMPLETED', 'CANCELLED']
+        )
+      );
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // SERVICE PROFESSIONALS (service_men & serviceMen)
+    // =========================================================================
+    match /service_men/{serviceManId} {
+      allow read: if true; // Public catalog for customer booking & technician lookup
+      allow create: if isSuperAdmin() ||
+                    (isFranchiseAdmin() && isMyDistrictData(request.resource.data)) ||
+                    (isSignedIn() && (request.resource.data.userId == request.auth.uid || serviceManId == request.auth.uid) &&
+                      (!('isVerified' in request.resource.data) || request.resource.data.isVerified == false) &&
+                      (!('kycStatus' in request.resource.data) || request.resource.data.kycStatus in ['pending', 'unverified', 'none']) &&
+                      (!('approvalStatus' in request.resource.data) || request.resource.data.approvalStatus in ['pending', 'unverified', 'none']) &&
+                      (!('earnings' in request.resource.data)) &&
+                      (!('totalEarned' in request.resource.data)) &&
+                      (!('wallet' in request.resource.data)) &&
+                      (!('commission' in request.resource.data)) &&
+                      (!('payout' in request.resource.data))
+                    );
+      allow update: if isSuperAdmin() ||
+                    (isFranchiseAdmin() && isMyDistrictData(resource.data)) ||
+                    (isSignedIn() && (resource.data.userId == request.auth.uid || serviceManId == request.auth.uid) &&
+                      // Verification & Approval cannot be self-escalated
+                      ((!('isVerified' in request.resource.data) && !('isVerified' in resource.data)) || request.resource.data.isVerified == resource.data.isVerified) &&
+                      ((!('kycStatus' in request.resource.data) && !('kycStatus' in resource.data)) || request.resource.data.kycStatus == resource.data.kycStatus || request.resource.data.kycStatus == 'pending') &&
+                      ((!('approvalStatus' in request.resource.data) && !('approvalStatus' in resource.data)) || request.resource.data.approvalStatus == resource.data.approvalStatus) &&
+                      // Account status: cannot unban/un-suspend
+                      ((!('status' in resource.data)) || resource.data.status in ['active', 'busy', 'pending'] || request.resource.data.status == resource.data.status) &&
+                      // District assignment cannot be altered
+                      ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId) &&
+                      ((!('districtName' in request.resource.data) && !('districtName' in resource.data)) || request.resource.data.districtName == resource.data.districtName) &&
+                      ((!('assignedDistrictId' in request.resource.data) && !('assignedDistrictId' in resource.data)) || request.resource.data.assignedDistrictId == resource.data.assignedDistrictId) &&
+                      ((!('assignedDistrictName' in request.resource.data) && !('assignedDistrictName' in resource.data)) || request.resource.data.assignedDistrictName == resource.data.assignedDistrictName) &&
+                      // Partner affiliations cannot be altered
+                      ((!('franchisePartnerId' in request.resource.data) && !('franchisePartnerId' in resource.data)) || request.resource.data.franchisePartnerId == resource.data.franchisePartnerId) &&
+                      ((!('businessPartnerId' in request.resource.data) && !('businessPartnerId' in resource.data)) || request.resource.data.businessPartnerId == resource.data.businessPartnerId) &&
+                      // Earnings, wallet, commission and payouts cannot be tampered with
+                      (!('earnings' in request.resource.data) || request.resource.data.earnings == resource.data.earnings) &&
+                      (!('totalEarned' in request.resource.data) || request.resource.data.totalEarned == resource.data.totalEarned) &&
+                      (!('totalEarnings' in request.resource.data) || request.resource.data.totalEarnings == resource.data.totalEarnings) &&
+                      (!('wallet' in request.resource.data) || request.resource.data.wallet == resource.data.wallet) &&
+                      (!('commission' in request.resource.data) || request.resource.data.commission == resource.data.commission) &&
+                      (!('payout' in request.resource.data) || request.resource.data.payout == resource.data.payout) &&
+                      // Admin permissions cannot be changed
+                      ((!('permissions' in request.resource.data) && !('permissions' in resource.data)) || request.resource.data.permissions == resource.data.permissions)
+                    );
+      allow delete: if isSuperAdmin();
+    }
+
+    match /serviceMen/{serviceManId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() ||
+                    (isFranchiseAdmin() && isMyDistrictData(request.resource.data)) ||
+                    (isSignedIn() && (request.resource.data.userId == request.auth.uid || serviceManId == request.auth.uid) &&
+                      (!('isVerified' in request.resource.data) || request.resource.data.isVerified == false) &&
+                      (!('kycStatus' in request.resource.data) || request.resource.data.kycStatus in ['pending', 'unverified', 'none']) &&
+                      (!('approvalStatus' in request.resource.data) || request.resource.data.approvalStatus in ['pending', 'unverified', 'none']) &&
+                      (!('earnings' in request.resource.data)) &&
+                      (!('totalEarned' in request.resource.data)) &&
+                      (!('wallet' in request.resource.data)) &&
+                      (!('commission' in request.resource.data)) &&
+                      (!('payout' in request.resource.data))
+                    );
+      allow update: if isSuperAdmin() ||
+                    (isFranchiseAdmin() && isMyDistrictData(resource.data)) ||
+                    (isSignedIn() && (resource.data.userId == request.auth.uid || serviceManId == request.auth.uid) &&
+                      ((!('isVerified' in request.resource.data) && !('isVerified' in resource.data)) || request.resource.data.isVerified == resource.data.isVerified) &&
+                      ((!('kycStatus' in request.resource.data) && !('kycStatus' in resource.data)) || request.resource.data.kycStatus == resource.data.kycStatus || request.resource.data.kycStatus == 'pending') &&
+                      ((!('approvalStatus' in request.resource.data) && !('approvalStatus' in resource.data)) || request.resource.data.approvalStatus == resource.data.approvalStatus) &&
+                      ((!('status' in resource.data)) || resource.data.status in ['active', 'busy', 'pending'] || request.resource.data.status == resource.data.status) &&
+                      ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId) &&
+                      ((!('districtName' in request.resource.data) && !('districtName' in resource.data)) || request.resource.data.districtName == resource.data.districtName) &&
+                      ((!('assignedDistrictId' in request.resource.data) && !('assignedDistrictId' in resource.data)) || request.resource.data.assignedDistrictId == resource.data.assignedDistrictId) &&
+                      ((!('assignedDistrictName' in request.resource.data) && !('assignedDistrictName' in resource.data)) || request.resource.data.assignedDistrictName == resource.data.assignedDistrictName) &&
+                      ((!('franchisePartnerId' in request.resource.data) && !('franchisePartnerId' in resource.data)) || request.resource.data.franchisePartnerId == resource.data.franchisePartnerId) &&
+                      ((!('businessPartnerId' in request.resource.data) && !('businessPartnerId' in resource.data)) || request.resource.data.businessPartnerId == resource.data.businessPartnerId) &&
+                      (!('earnings' in request.resource.data) || request.resource.data.earnings == resource.data.earnings) &&
+                      (!('totalEarned' in request.resource.data) || request.resource.data.totalEarned == resource.data.totalEarned) &&
+                      (!('totalEarnings' in request.resource.data) || request.resource.data.totalEarnings == resource.data.totalEarnings) &&
+                      (!('wallet' in request.resource.data) || request.resource.data.wallet == resource.data.wallet) &&
+                      (!('commission' in request.resource.data) || request.resource.data.commission == resource.data.commission) &&
+                      (!('payout' in request.resource.data) || request.resource.data.payout == resource.data.payout) &&
+                      ((!('permissions' in request.resource.data) && !('permissions' in resource.data)) || request.resource.data.permissions == resource.data.permissions)
+                    );
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // BUSINESS PARTNERS
+    // =========================================================================
+    match /business_partners/{partnerId} {
+      allow read: if isSignedIn();
+      allow create: if isSuperAdmin() ||
+                    (isSignedIn() && (request.auth.uid == request.resource.data.userId || partnerId == request.auth.uid) &&
+                      (!('commission' in request.resource.data)) &&
+                      (!('commissionRate' in request.resource.data)) &&
+                      (!('profitPercentage' in request.resource.data)) &&
+                      (!('totalRevenueGenerated' in request.resource.data)) &&
+                      (!('wallet' in request.resource.data)) &&
+                      (!('balance' in request.resource.data))
+                    );
+      allow update: if isSuperAdmin() ||
+                    (isSignedIn() && (request.auth.uid == resource.data.userId || partnerId == request.auth.uid) &&
+                      // Status and approval cannot be altered by partner
+                      ((!('status' in request.resource.data) && !('status' in resource.data)) || request.resource.data.status == resource.data.status) &&
+                      ((!('kycStatus' in request.resource.data) && !('kycStatus' in resource.data)) || request.resource.data.kycStatus == resource.data.kycStatus || request.resource.data.kycStatus == 'pending') &&
+                      // Role cannot be changed
+                      ((!('role' in request.resource.data) && !('role' in resource.data)) || request.resource.data.role == resource.data.role) &&
+                      // District assignments cannot be changed
+                      ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId) &&
+                      ((!('assignedDistrictId' in request.resource.data) && !('assignedDistrictId' in resource.data)) || request.resource.data.assignedDistrictId == resource.data.assignedDistrictId) &&
+                      // Franchise partner ID cannot be changed
+                      ((!('franchisePartnerId' in request.resource.data) && !('franchisePartnerId' in resource.data)) || request.resource.data.franchisePartnerId == resource.data.franchisePartnerId) &&
+                      // Permissions cannot be changed
+                      ((!('permissions' in request.resource.data) && !('permissions' in resource.data)) || request.resource.data.permissions == resource.data.permissions) &&
+                      // Commission / profit rates cannot be changed
+                      ((!('commission' in request.resource.data) && !('commission' in resource.data)) || request.resource.data.commission == resource.data.commission) &&
+                      ((!('commissionRate' in request.resource.data) && !('commissionRate' in resource.data)) || request.resource.data.commissionRate == resource.data.commissionRate) &&
+                      ((!('profitPercentage' in request.resource.data) && !('profitPercentage' in resource.data)) || request.resource.data.profitPercentage == resource.data.profitPercentage) &&
+                      // Financial fields
+                      (!('totalRevenueGenerated' in request.resource.data) || request.resource.data.totalRevenueGenerated == resource.data.totalRevenueGenerated) &&
+                      (!('wallet' in request.resource.data) || request.resource.data.wallet == resource.data.wallet) &&
+                      (!('balance' in request.resource.data) || request.resource.data.balance == resource.data.balance)
+                    );
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // CATEGORIES & SERVICES (Public Catalog)
+    // Public may read approved catalog data. Super Admin manages global catalog.
+    // Franchise Admin can modify ONLY district-specific catalog belonging to their assigned district.
+    // Franchise Admin cannot delete existing categories or services.
+    // =========================================================================
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || (isFranchiseAdmin() && isMyDistrictData(request.resource.data));
+      allow update: if isSuperAdmin() || (
+        isFranchiseAdmin() &&
+        isMyDistrictData(resource.data) &&
+        isMyDistrictData(request.resource.data) &&
+        ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId)
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    match /services/{serviceId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || (isFranchiseAdmin() && isMyDistrictData(request.resource.data));
+      allow update: if isSuperAdmin() || (
+        isFranchiseAdmin() &&
+        isMyDistrictData(resource.data) &&
+        isMyDistrictData(request.resource.data) &&
+        ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId)
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // KYC DOCUMENTS (Private Identity Data - Aadhaar, PAN, Licenses)
+    // =========================================================================
+    match /kyc_documents/{docId} {
+      // Strictly isolated: Only owner, Super Admin, or assigned District Franchise Admin can inspect
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.userId == request.auth.uid ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data))
+      );
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          request.resource.data.userId == request.auth.uid &&
+          (!('isVerified' in request.resource.data) || request.resource.data.isVerified == false) &&
+          (!('verified' in request.resource.data) || request.resource.data.verified == false) &&
+          (!('status' in request.resource.data) || request.resource.data.status in ['pending', 'unverified', 'submitted']) &&
+          (!('verifiedBy' in request.resource.data)) &&
+          (!('verifiedAt' in request.resource.data))
+        )
+      );
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data)) ||
+        (
+          resource.data.userId == request.auth.uid &&
+          request.resource.data.userId == resource.data.userId &&
+          // Cannot self-verify
+          ((!('isVerified' in request.resource.data) && !('isVerified' in resource.data)) || request.resource.data.isVerified == resource.data.isVerified) &&
+          ((!('verified' in request.resource.data) && !('verified' in resource.data)) || request.resource.data.verified == resource.data.verified) &&
+          ((!('status' in request.resource.data) && !('status' in resource.data)) || request.resource.data.status in ['pending', 'unverified', 'submitted', resource.data.status]) &&
+          ((!('verifiedBy' in request.resource.data) && !('verifiedBy' in resource.data)) || request.resource.data.verifiedBy == resource.data.verifiedBy) &&
+          ((!('verifiedAt' in request.resource.data) && !('verifiedAt' in resource.data)) || request.resource.data.verifiedAt == resource.data.verifiedAt)
+        )
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // FRANCHISE AGREEMENTS (Yearly Agreement Records & History)
+    // =========================================================================
+    match /franchise_agreements/{agreementId} {
+      // Super Admin can read all. Franchise Partner can read only their own agreements.
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.franchisePartnerId == request.auth.uid ||
+        (hasFranchisePartnerDoc() && resource.data.franchisePartnerId == getFranchisePartnerData().id)
+      );
+
+      // Super Admin controls agreement creation
+      allow create: if isSuperAdmin();
+
+      // Super Admin has full control over all agreement fields.
+      // Partner may only accept/submit agreement terms; MUST NOT modify Super Admin-controlled fields:
+      // charges, commission, profit, start date, end date, termination status, approval status, agreement version
+      allow update: if isSuperAdmin() || (
+        isSignedIn() &&
+        (resource.data.franchisePartnerId == request.auth.uid ||
+         (hasFranchisePartnerDoc() && resource.data.franchisePartnerId == getFranchisePartnerData().id)) &&
+        isMyDistrictData(resource.data) &&
+        // Partner and district assignment must be immutable
+        request.resource.data.franchisePartnerId == resource.data.franchisePartnerId &&
+        ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId) &&
+        // Super Admin-controlled financial and operational terms
+        ((!('charges' in request.resource.data) && !('charges' in resource.data)) || request.resource.data.charges == resource.data.charges) &&
+        ((!('commissionPercent' in request.resource.data) && !('commissionPercent' in resource.data)) || request.resource.data.commissionPercent == resource.data.commissionPercent) &&
+        ((!('profitPercentage' in request.resource.data) && !('profitPercentage' in resource.data)) || request.resource.data.profitPercentage == resource.data.profitPercentage) &&
+        ((!('startDate' in request.resource.data) && !('startDate' in resource.data)) || request.resource.data.startDate == resource.data.startDate) &&
+        ((!('endDate' in request.resource.data) && !('endDate' in resource.data)) || request.resource.data.endDate == resource.data.endDate) &&
+        ((!('agreementYear' in request.resource.data) && !('agreementYear' in resource.data)) || request.resource.data.agreementYear == resource.data.agreementYear) &&
+        ((!('versionNumber' in request.resource.data) && !('versionNumber' in resource.data)) || request.resource.data.versionNumber == resource.data.versionNumber) &&
+        ((!('agreementVersion' in request.resource.data) && !('agreementVersion' in resource.data)) || request.resource.data.agreementVersion == resource.data.agreementVersion) &&
+        // Status: Partner can only set ACCEPTED or keep status unchanged; cannot set APPROVED, ACTIVE, TERMINATED, CANCELLED
+        (request.resource.data.status == resource.data.status || request.resource.data.status == 'ACCEPTED') &&
+        // Termination history & details immutable by partner
+        ((!('terminationDetails' in request.resource.data) && !('terminationDetails' in resource.data)) || request.resource.data.terminationDetails == resource.data.terminationDetails) &&
+        ((!('terminationHistory' in request.resource.data) && !('terminationHistory' in resource.data)) || request.resource.data.terminationHistory == resource.data.terminationHistory)
+      );
+
+      // Only Super Admin can delete an agreement
+      allow delete: if isSuperAdmin();
+    }
+
+    match /franchise_kyc_documents/{docId} {
+      // Super Admin can inspect all. Franchise Partner can inspect only their own KYC dossier.
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.franchisePartnerId == request.auth.uid ||
+        (hasFranchisePartnerDoc() && resource.data.franchisePartnerId == getFranchisePartnerData().id)
+      );
+
+      // Franchise Partner may upload initial document metadata
+      allow create: if isSuperAdmin() || (
+        isSignedIn() &&
+        (request.resource.data.franchisePartnerId == request.auth.uid ||
+         (hasFranchisePartnerDoc() && request.resource.data.franchisePartnerId == getFranchisePartnerData().id)) &&
+        isMyDistrictData(request.resource.data) &&
+        // Partner MUST NOT directly set status to VERIFIED or APPROVED
+        request.resource.data.status != 'VERIFIED' &&
+        request.resource.data.status != 'APPROVED' &&
+        // Administrative decision fields forbidden for partner
+        (!('verificationBy' in request.resource.data)) &&
+        (!('verificationDate' in request.resource.data)) &&
+        (!('verifiedAt' in request.resource.data)) &&
+        (!('adminDecision' in request.resource.data))
+      );
+
+      // Super Admin can verify, approve, reject or update any KYC document.
+      // Franchise Partner may update metadata or replace rejected documents
+      allow update: if isSuperAdmin() || (
+        isSignedIn() &&
+        (resource.data.franchisePartnerId == request.auth.uid ||
+         (hasFranchisePartnerDoc() && resource.data.franchisePartnerId == getFranchisePartnerData().id)) &&
+        isMyDistrictData(resource.data) &&
+        // Partner and district assignment must be immutable
+        request.resource.data.franchisePartnerId == resource.data.franchisePartnerId &&
+        ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId) &&
+        // Partner MUST NOT directly set status to VERIFIED or APPROVED
+        request.resource.data.status != 'VERIFIED' &&
+        request.resource.data.status != 'APPROVED' &&
+        // Verification & admin decision fields can only be modified by Super Admin
+        ((!('verificationBy' in request.resource.data) && !('verificationBy' in resource.data)) || request.resource.data.verificationBy == resource.data.verificationBy) &&
+        ((!('verificationDate' in request.resource.data) && !('verificationDate' in resource.data)) || request.resource.data.verificationDate == resource.data.verificationDate) &&
+        ((!('verifiedAt' in request.resource.data) && !('verifiedAt' in resource.data)) || request.resource.data.verifiedAt == resource.data.verifiedAt) &&
+        ((!('adminDecision' in request.resource.data) && !('adminDecision' in resource.data)) || request.resource.data.adminDecision == resource.data.adminDecision)
+      );
+
+      // Only Super Admin can delete a KYC document
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // PAYMENTS, TRANSACTIONS & WALLETS (Financial Security Hardening)
+    // =========================================================================
+    match /payments/{paymentId} {
+      // Users may read only their own payment records; District Admin can view district records
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.customerId == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
+        isMyDistrictData(resource.data)
+      );
+      // Client users must NOT be able to create arbitrary final payment records.
+      // Financial fields (amount, paymentStatus, razorpayPaymentId, orderId, transactionId,
+      // commission, payout, refund, settlement information) must NOT be user-controlled.
+      // Trusted server / Cloud Functions / Admin SDK and Super Admin create/update authoritative payment records.
+      allow write: if isSuperAdmin();
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.userId == request.auth.uid ||
+        resource.data.customerId == request.auth.uid ||
+        isMyDistrictData(resource.data)
+      );
+      allow write: if isSuperAdmin();
+    }
+
+    match /wallets/{walletId} {
+      // Users can READ only their own wallet; Super Admin can read all
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        walletId == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
+      // Users must NOT directly create or modify their balance.
+      // Must NOT modify availableBalance, totalEarnings, withdrawableAmount, pendingAmount,
+      // commission, payout or any financial field.
+      // Super Admin and trusted server / Admin SDK manage wallet financial data.
+      allow write: if isSuperAdmin();
+    }
+
+    match /wallet_transactions/{transId} {
+      // Users can READ only their own transaction history
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.walletId == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
+      // Users must NOT create transactions themselves.
+      // Users must NOT update transactions.
+      // Users must NOT delete transactions.
+      // Wallet ledger entries must be created/modified only by trusted server / Admin SDK or authorized Super Admin.
+      allow write: if isSuperAdmin();
+    }
+
+    match /serviceman_payouts/{payoutId} {
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.serviceManId == request.auth.uid ||
+        isMyDistrictData(resource.data)
+      );
+      allow write: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // REVIEWS & FEEDBACK
+    // =========================================================================
+    match /reviews/{reviewId} {
+      // Public review catalog & testimonials (ratings lookup for services & homepage)
+      allow read: if true;
+
+      // Allow review creation only for authenticated customer associated with the booking
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          request.resource.data.customerId == request.auth.uid &&
+          request.resource.data.rating is int &&
+          request.resource.data.rating >= 1 &&
+          request.resource.data.rating <= 5 &&
+          // Where booking information exists, verify customer is associated with booking and booking has progressed
+          (
+            !('bookingId' in request.resource.data) ||
+            request.resource.data.bookingId == '' ||
+            (
+              exists(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)) &&
+              get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.customerId == request.auth.uid &&
+              get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.status in ['completed', 'verified', 'in_progress', 'accepted']
+            )
+          ) &&
+          // Protect admin / verification fields from self-escalation
+          (!('isVerified' in request.resource.data) || request.resource.data.isVerified == false) &&
+          (!('verified' in request.resource.data) || request.resource.data.verified == false) &&
+          (!('featured' in request.resource.data) || request.resource.data.featured == false) &&
+          (!('status' in request.resource.data) || request.resource.data.status in ['published', 'pending', 'active'])
+        )
+      );
+
+      // Updates: Customer can update comment/rating on their own review; cannot tamper with customerId, bookingId, serviceManId
+      allow update: if isSuperAdmin() || (
+        isSignedIn() &&
+        resource.data.customerId == request.auth.uid &&
+        request.resource.data.customerId == resource.data.customerId &&
+        ((!('bookingId' in request.resource.data) && !('bookingId' in resource.data)) || request.resource.data.bookingId == resource.data.bookingId) &&
+        ((!('serviceManId' in request.resource.data) && !('serviceManId' in resource.data)) || request.resource.data.serviceManId == resource.data.serviceManId) &&
+        request.resource.data.rating is int &&
+        request.resource.data.rating >= 1 &&
+        request.resource.data.rating <= 5 &&
+        ((!('isVerified' in request.resource.data) && !('isVerified' in resource.data)) || request.resource.data.isVerified == resource.data.isVerified) &&
+        ((!('verified' in request.resource.data) && !('verified' in resource.data)) || request.resource.data.verified == resource.data.verified) &&
+        ((!('featured' in request.resource.data) && !('featured' in resource.data)) || request.resource.data.featured == resource.data.featured)
+      );
+
+      allow delete: if isSuperAdmin() || (isSignedIn() && resource.data.customerId == request.auth.uid);
+    }
+
+    // =========================================================================
+    // MESSAGES & IN-APP NOTIFICATIONS
+    // =========================================================================
+    match /messages/{messageId} {
+      // Accessible only to sender, receiver, authorized booking participants, authorized franchise admin, or Super Admin
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.senderId == request.auth.uid ||
+        resource.data.receiverId == request.auth.uid ||
+        (
+          resource.data.bookingId != null &&
+          exists(/databases/$(database)/documents/bookings/$(resource.data.bookingId)) &&
+          (
+            get(/databases/$(database)/documents/bookings/$(resource.data.bookingId)).data.customerId == request.auth.uid ||
+            get(/databases/$(database)/documents/bookings/$(resource.data.bookingId)).data.serviceManId == request.auth.uid ||
+            get(/databases/$(database)/documents/bookings/$(resource.data.bookingId)).data.partnerId == request.auth.uid ||
+            (isFranchiseAdmin() && isMyDistrictData(get(/databases/$(database)/documents/bookings/$(resource.data.bookingId)).data))
+          )
+        ) ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data))
+      );
+
+      // Authenticated sender can create message for their recipient/booking
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          request.resource.data.senderId == request.auth.uid &&
+          request.resource.data.receiverId != null &&
+          request.resource.data.receiverId != request.auth.uid &&
+          (
+            !('bookingId' in request.resource.data) ||
+            request.resource.data.bookingId == '' ||
+            (
+              exists(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)) &&
+              (
+                get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.customerId == request.auth.uid ||
+                get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.serviceManId == request.auth.uid ||
+                get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.partnerId == request.auth.uid ||
+                (isFranchiseAdmin() && isMyDistrictData(get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data))
+              )
+            )
+          )
+        )
+      );
+
+      // Updating a message: sender/receiver can mark read; senderId & receiverId CANNOT be changed
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          (resource.data.receiverId == request.auth.uid || resource.data.senderId == request.auth.uid) &&
+          // Cannot tamper with sender or receiver to hijack conversations
+          request.resource.data.senderId == resource.data.senderId &&
+          request.resource.data.receiverId == resource.data.receiverId &&
+          ((!('bookingId' in request.resource.data) && !('bookingId' in resource.data)) || request.resource.data.bookingId == resource.data.bookingId) &&
+          ((!('districtId' in request.resource.data) && !('districtId' in resource.data)) || request.resource.data.districtId == resource.data.districtId) &&
+          request.resource.data.text == resource.data.text &&
+          request.resource.data.timestamp == resource.data.timestamp
+        )
+      );
+
+      allow delete: if isSuperAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      // Normal users can READ only their own notifications; Super Admin reads all; Franchise Admin reads district
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.userId == request.auth.uid ||
+        resource.data.recipientId == request.auth.uid ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data))
+      );
+
+      // Notification creation must be restricted to Super Admin or authorized server / Cloud Functions / Admin SDK
+      allow create: if isSuperAdmin();
+
+      // Normal users can mark their own notification as read/dismissed where supported;
+      // cannot change recipientId, userId, type, or trusted system fields
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          (resource.data.userId == request.auth.uid || resource.data.recipientId == request.auth.uid) &&
+          // Cannot change userId or recipientId
+          ((!('userId' in resource.data) && !('userId' in request.resource.data)) || request.resource.data.userId == resource.data.userId) &&
+          ((!('recipientId' in resource.data) && !('recipientId' in request.resource.data)) || request.resource.data.recipientId == resource.data.recipientId) &&
+          // Cannot change notification type, title, message, link, createdAt
+          ((!('type' in resource.data) && !('type' in request.resource.data)) || request.resource.data.type == resource.data.type) &&
+          ((!('title' in resource.data) && !('title' in request.resource.data)) || request.resource.data.title == resource.data.title) &&
+          ((!('message' in resource.data) && !('message' in request.resource.data)) || request.resource.data.message == resource.data.message) &&
+          ((!('link' in resource.data) && !('link' in request.resource.data)) || request.resource.data.link == resource.data.link) &&
+          ((!('createdAt' in resource.data) && !('createdAt' in request.resource.data)) || request.resource.data.createdAt == resource.data.createdAt)
+        )
+      );
+
+      // Normal user can dismiss / delete only their own notification; Super Admin can delete any
+      allow delete: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.userId == request.auth.uid ||
+        resource.data.recipientId == request.auth.uid
+      );
+    }
+
+    // =========================================================================
+    // ADMIN ALERTS (Hardened Access: Authenticated Super Admin Only)
+    // No public access. Only authenticated authorized Super Admin can read/write.
+    // Normal users must not access admin alerts.
+    // =========================================================================
+    match /admin_alerts/{alertId} {
+      allow read: if isSuperAdmin();
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // AUDIT LOGS (Immutable System Security Trail: Append-Only)
+    // Super Admin reads; Authenticated operations log events; Updates & Deletes blocked
+    // Unauthenticated creation is strictly prevented; Keep existing audit functionality working
+    // =========================================================================
+    match /audit_logs/{auditId} {
+      allow read: if isSuperAdmin();
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        (request.resource.data.action is string && request.resource.data.action.size() > 0)
+      );
+      allow update, delete: if false;
+    }
+
+    // =========================================================================
+    // FRANCHISE APPLICATIONS & CITIES
+    // =========================================================================
+    match /franchise_applications/{appId} {
+      // Public applicant registration with strict field whitelist / privilege isolation
+      allow create: if isSuperAdmin() || (
+        // Status must be initial/applied, cannot self-approve
+        (!('status' in request.resource.data) || request.resource.data.status in ['applied', 'pending', 'new']) &&
+        (!('isApproved' in request.resource.data) || request.resource.data.isApproved == false) &&
+        (!('approved' in request.resource.data) || request.resource.data.approved == false) &&
+        // Applicant cannot set administrative decision or assignment fields
+        (!('approvedBy' in request.resource.data)) &&
+        (!('approvedAt' in request.resource.data)) &&
+        (!('reviewedBy' in request.resource.data)) &&
+        (!('reviewedAt' in request.resource.data)) &&
+        (!('adminDecision' in request.resource.data)) &&
+        (!('adminDecisionDate' in request.resource.data)) &&
+        (!('decisionNotes' in request.resource.data)) &&
+        (!('assignedDistrictId' in request.resource.data)) &&
+        (!('assignedDistrictPartnerId' in request.resource.data)) &&
+        (!('role' in request.resource.data)) &&
+        (!('permissions' in request.resource.data))
+      );
+      // Super Admin and the applicant can read application data
+      allow read: if isSuperAdmin() || (isSignedIn() && (
+        resource.data.email == request.auth.token.email ||
+        (resource.data.applicantId != null && resource.data.applicantId == request.auth.uid) ||
+        (resource.data.userId != null && resource.data.userId == request.auth.uid)
+      ));
+      // Only Super Admin can review, approve, reject, or delete applications
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /franchise_cities/{cityId} {
+      // Public directory for customer city selection & coverage across India
+      allow read: if true;
+      // Super Admin exclusively activates, deactivates, and assigns franchise partners
+      allow create, delete: if isSuperAdmin();
+      // Franchise Admin can only update local operational fields for their own assigned district;
+      // CANNOT activate/deactivate or reassign franchise partners
+      allow update: if isSuperAdmin() || (
+        isFranchiseAdmin() &&
+        (cityId == getMyDistrictId() || isMyDistrictData(resource.data)) &&
+        request.resource.data.status == resource.data.status &&
+        ((!('assignedPartnerId' in request.resource.data) && !('assignedPartnerId' in resource.data)) || request.resource.data.assignedPartnerId == resource.data.assignedPartnerId) &&
+        ((!('activatedBy' in request.resource.data) && !('activatedBy' in resource.data)) || request.resource.data.activatedBy == resource.data.activatedBy) &&
+        ((!('activatedAt' in request.resource.data) && !('activatedAt' in resource.data)) || request.resource.data.activatedAt == resource.data.activatedAt)
+      );
+    }
+
+    match /districts/{districtId} {
+      allow read: if true;
+      allow create, delete: if isSuperAdmin();
+      allow update: if isSuperAdmin() || (
+        isFranchiseAdmin() &&
+        (districtId == getMyDistrictId() || isMyDistrictData(resource.data)) &&
+        request.resource.data.status == resource.data.status &&
+        ((!('assignedPartnerId' in request.resource.data) && !('assignedPartnerId' in resource.data)) || request.resource.data.assignedPartnerId == resource.data.assignedPartnerId)
+      );
+    }
+
+    // =========================================================================
+    // PLATFORM SETTINGS, DISTRICT SETTINGS, THEMES & LOGS
+    // =========================================================================
+    match /settings/{settingId} {
+      allow read: if !(settingId in ['razorpay', 'security', 'payment', 'keys', 'secrets', 'credentials']) || isSuperAdmin();
+      // Global platform settings are strictly Super Admin only
+      // Franchise Admin can modify only their own district-specific settings document
+      allow write: if isSuperAdmin() || (
+        isFranchiseAdmin() &&
+        !(settingId in ['platform', 'platform_commission', 'kyc_settings', 'franchise_kyc_config', 'global', 'payment', 'security', 'auth', 'commissions', 'razorpay']) &&
+        (settingId == getMyDistrictId() || isMyDistrictData(resource.data) || isMyDistrictData(request.resource.data)) &&
+        (!('platformProfit' in request.resource.data)) &&
+        (!('platformCommission' in request.resource.data)) &&
+        (!('companyCommission' in request.resource.data))
+      );
+    }
+
+    match /district_settings/{districtId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() || (
+        isFranchiseAdmin() &&
+        (districtId == getMyDistrictId() || isMyDistrictData(resource.data) || isMyDistrictData(request.resource.data))
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    match /themeSettings/{docId} {
+      // Public read is allowed only for public theme data (e.g. 'global', 'active', 'public_theme')
+      allow read: if (docId in ['global', 'active', 'public_theme']) || isSuperAdmin();
+      // Only Super Admin can create/update/delete theme settings
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // BROADCAST ANNOUNCEMENTS (FESTIVAL & ADMINISTRATIVE NOTICES ACROSS ALL APPS)
+    // =========================================================================
+    match /broadcast_announcements/{announcementId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /whatsapp_logs/{logId} {
+      // Super Admin reads all. Franchise Admin reads ONLY logs for their assigned district.
+      // Normal users read only their own logs (cannot inspect other users' phone numbers or messages)
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data)) ||
+        (resource.data.recipientId != null && resource.data.recipientId == request.auth.uid) ||
+        (resource.data.userId != null && resource.data.userId == request.auth.uid) ||
+        (resource.data.customerId != null && resource.data.customerId == request.auth.uid)
+      );
+
+      // Only authorized parties can create logs: Super Admin, Franchise Admin (for their district),
+      // or authenticated customers/pro for their own booking notifications
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isFranchiseAdmin() && isMyDistrictData(request.resource.data)) ||
+        (
+          request.resource.data.customerId == request.auth.uid ||
+          request.resource.data.userId == request.auth.uid ||
+          request.resource.data.senderId == request.auth.uid
+        )
+      );
+
+      // Logs are immutable system audit trail
+      allow update: if false;
+      allow delete: if isSuperAdmin();
+    }
+
+    match /bulk_campaigns/{campaignId} {
+      // Super Admin has global access; Franchise Admin isolated to their district
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data))
+      );
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isFranchiseAdmin() && isMyDistrictData(request.resource.data))
+      );
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data) && isMyDistrictData(request.resource.data))
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    match /sms_logs/{logId} {
+      // Super Admin has global access; Franchise Admin isolated to their district
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data)) ||
+        (resource.data.recipientId != null && resource.data.recipientId == request.auth.uid) ||
+        (resource.data.userId != null && resource.data.userId == request.auth.uid)
+      );
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isFranchiseAdmin() && isMyDistrictData(request.resource.data))
+      );
+      allow update: if false;
+      allow delete: if isSuperAdmin();
+    }
+
+    match /video_calls/{callId} {
+      // No public access: Only authenticated call participants and authorized Super Admin can read
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        isVideoCallParticipant(resource.data)
+      );
+      // Only authenticated call participants or authorized Super Admin can create
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        request.resource.data.hostId == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid ||
+        ('participantId' in request.resource.data && request.resource.data.participantId == request.auth.uid) ||
+        ('participants' in request.resource.data && request.resource.data.participants is list && request.auth.uid in request.resource.data.participants)
+      );
+      // Only call participants or authorized Super Admin can update
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          isVideoCallParticipant(resource.data) &&
+          request.resource.data.hostId == resource.data.hostId &&
+          (!('participants' in resource.data) || request.resource.data.participants == resource.data.participants)
+        )
+      );
+      // Only authorized Super Admin or call host can delete
+      allow delete: if isSignedIn() && (
+        isSuperAdmin() ||
+        (resource.data.hostId != null && resource.data.hostId == request.auth.uid)
+      );
+
+      // Subcollections (signaling, ICE candidates) accessible only to participants and Super Admin
+      match /{allSubcollections=**} {
+        allow read, write: if isSignedIn() && (
+          isSuperAdmin() ||
+          (
+            exists(/databases/$(database)/documents/video_calls/$(callId)) &&
+            isVideoCallParticipant(get(/databases/$(database)/documents/video_calls/$(callId)).data)
+          )
+        );
+      }
+    }
+
+    match /password_reset_requests/{requestId} {
+      allow create: if true;
+      allow read, update, delete: if isSuperAdmin();
+    }
+
+    match /razorpay_orders/{orderId} {
+      // Super Admin can access all orders; Users can read only their own order
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        (resource.data.userId != null && resource.data.userId == request.auth.uid) ||
+        (resource.data.customerId != null && resource.data.customerId == request.auth.uid) ||
+        ('notes' in resource.data && (
+          (resource.data.notes.userId != null && resource.data.notes.userId == request.auth.uid) ||
+          (resource.data.notes.customerId != null && resource.data.notes.customerId == request.auth.uid)
+        ))
+      );
+      // Client users (customers, service professionals, franchise partners) cannot create or modify trusted Razorpay order records.
+      // Creation and modification are strictly managed by trusted server / Cloud Functions / Admin SDK and authorized Super Admin.
+      allow write: if isSuperAdmin();
+    }
+
+    match /webhook_events/{eventId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /district_zip_assets/{assetId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /deploymentVersions/{versionId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /deploymentJobs/{jobId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /bills/{billId} {
+      // Customer, assigned serviceman, or Super Admin can read immutable bill snapshot
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        (resource.data.customerId != null && resource.data.customerId == request.auth.uid) ||
+        (resource.data.serviceManId != null && resource.data.serviceManId == request.auth.uid)
+      );
+      // Only server / admin can write bills
+      allow write: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // PHASE 2: BOOKING ASSIGNMENTS & OFFERS
+    // =========================================================================
+    match /booking_assignments/{assignmentId} {
+      // Super Admin, Franchise Admin (district), or target ServiceMan can read
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.serviceManId == request.auth.uid ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data))
+      );
+
+      // Creation strictly restricted to Super Admin / Server Cloud Functions (Admin SDK)
+      allow create: if isSuperAdmin();
+
+      // Updates:
+      // Super Admin has full write access.
+      // ServiceMan can only reject/decline their own pending offer.
+      // Acceptance is strictly server-authoritative via atomic Cloud Function or Server API.
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          resource.data.serviceManId == request.auth.uid &&
+          request.resource.data.serviceManId == resource.data.serviceManId &&
+          request.resource.data.bookingId == resource.data.bookingId &&
+          request.resource.data.amount == resource.data.amount &&
+          request.resource.data.status in ['rejected', 'declined'] &&
+          resource.data.status == 'offered'
+        )
+      );
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // =========================================================================
+    // PHASE 2: DEVICE TOKENS (FCM PUSH NOTIFICATION REGISTRATION)
+    // =========================================================================
+    match /device_tokens/{tokenId} {
+      // Users can only read, write, or delete their own registered device tokens
+      allow read: if isSignedIn() && (isSuperAdmin() || resource.data.userId == request.auth.uid);
+      allow create, update: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() && (isSuperAdmin() || resource.data.userId == request.auth.uid);
+    }
+
+    // =========================================================================
+    // SERVICE PROFESSIONAL ACTIONABLE BOOKING OFFERS
+    // =========================================================================
+    match /booking_offers/{offerId} {
+      // Super Admin, Franchise Admin (district isolation), or assigned ServiceMan can read
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.serviceManId == request.auth.uid ||
+        (isFranchiseAdmin() && isMyDistrictData(resource.data))
+      );
+
+      // Creation by Super Admin, booking creator, or server
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          request.resource.data.status == 'PENDING' &&
+          request.resource.data.serviceManId != null &&
+          request.resource.data.bookingId != null
+        )
+      );
+
+      // Updates:
+      // Super Admin: full access
+      // Assigned ServiceMan: PENDING -> ACCEPTED, REJECTED, EXPIRED (immutable identifiers)
+      // Customer/System: PENDING -> CANCELLED / EXPIRED
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          resource.data.serviceManId == request.auth.uid &&
+          request.resource.data.serviceManId == resource.data.serviceManId &&
+          request.resource.data.bookingId == resource.data.bookingId &&
+          (
+            (request.resource.data.status in ['REJECTED', 'EXPIRED'] && resource.data.status == 'PENDING') ||
+            (request.resource.data.status == 'ACCEPTED' && resource.data.status == 'PENDING')
+          )
+        ) ||
+        (
+          request.resource.data.status in ['EXPIRED', 'CANCELLED'] &&
+          request.resource.data.bookingId == resource.data.bookingId &&
+          request.resource.data.serviceManId == resource.data.serviceManId
+        )
+      );
+
+      allow delete: if isSuperAdmin();
+    }
+  }
+}

@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ea580c"/>
+      <stop offset="45%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <linearGradient id="innerGlow" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.25"/>
+    </linearGradient>
+    <filter id="dropShadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Background base rounded container -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+  <rect width="512" height="512" rx="112" fill="url(#innerGlow)"/>
+
+  <!-- Subtle accent ring -->
+  <rect x="20" y="20" width="472" height="472" rx="96" fill="none" stroke="#ffffff" stroke-width="4" stroke-opacity="0.3"/>
+
+  <!-- Central House / Roof Silhouette (Home Services) -->
+  <g filter="url(#dropShadow)">
+    <!-- Roof peak -->
+    <path d="M256 96 L108 214 C100 220 108 232 118 232 L144 232 L144 380 C144 394 156 406 170 406 L342 406 C356 406 368 394 368 380 L368 232 L394 232 C404 232 412 220 404 214 Z" fill="#ffffff" fill-opacity="0.96"/>
+
+    <!-- Inner Dark Hex Shield / House Core -->
+    <path d="M256 142 L164 216 L164 376 C164 380 167 384 172 384 L340 384 C345 384 348 380 348 376 L348 216 Z" fill="#1c1917"/>
+
+    <!-- Crossed Service Tools (Wrench + Screwdriver / Verified Pro Emblem) -->
+    <!-- Wrench (Lucide-inspired stylized wrench) -->
+    <g transform="translate(256,275) rotate(-35) translate(-256,-275)">
+      <!-- Wrench head -->
+      <path d="M256 182 C236 182 220 196 216 216 L238 230 C242 224 250 220 258 222 C266 224 272 230 274 238 L296 230 C292 206 276 182 256 182 Z" fill="#f97316"/>
+      <!-- Wrench handle -->
+      <rect x="246" y="226" width="20" height="98" rx="8" fill="#ea580c"/>
+      <circle cx="256" cy="310" r="4" fill="#ffffff"/>
+    </g>
+
+    <g transform="translate(256,275) rotate(35) translate(-256,-275)">
+      <!-- Screwdriver / Plier Tool -->
+      <rect x="248" y="196" width="16" height="40" rx="3" fill="#f59e0b"/>
+      <rect x="246" y="234" width="20" height="88" rx="7" fill="#fb923c"/>
+      <line x1="251" y1="246" x2="251" y2="304" stroke="#7c2d12" stroke-width="2"/>
+      <line x1="261" y1="246" x2="261" y2="304" stroke="#7c2d12" stroke-width="2"/>
+    </g>
+
+    <!-- Center Emblem Star / Shield -->
+    <circle cx="256" cy="275" r="26" fill="#ea580c" stroke="#ffffff" stroke-width="4"/>
+    <path d="M256 261 L260 271 L270 272 L262 279 L265 289 L256 283 L247 289 L250 279 L242 272 L252 271 Z" fill="#ffffff"/>
+  </g>
+
+  <!-- Brand Typography "HARDINKAAM" -->
+  <text x="256" y="455" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="900" font-size="44" letter-spacing="2" fill="#ffffff">HARDIN<tspan fill="#fed7aa">KAAM</tspan></text>
+</svg>

@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.hardinkaam.app",
+      "sha256_cert_fingerprints": [
+        "14:6D:E9:CD:AB:10:D1:2E:53:AE:55:45:32:7B:AE:A7:77:43:33:ED:DE:C9:1E:88:E4:F3:E0:46:92:35:F9:C4",
+        "A1:B2:C3:D4:E5:F6:12:34:56:78:90:AB:CD:EF:12:34:56:78:90:AB:CD:EF:12:34:56:78:90:AB:CD:EF:12:34"
+      ]
+    }
+  }
+]

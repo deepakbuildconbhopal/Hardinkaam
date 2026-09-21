@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+:root {
+  --theme-primary: #ea580c;
+  --theme-primary-hover: #c2410c;
+  --theme-primary-light: #fff7ed;
+  --theme-primary-dark: #9a3412;
+  --theme-secondary: #0f766e;
+  --theme-secondary-light: #f0fdfa;
+  --theme-accent: #f59e0b;
+  --theme-badge-bg: #ffedd5;
+  --theme-badge-text: #9a3412;
+  --theme-header-border: #fdba74;
+}
+
+.bg-theme-primary {
+  background-color: var(--theme-primary, #ea580c) !important;
+}
+
+.hover\:bg-theme-primary-hover:hover {
+  background-color: var(--theme-primary-hover, #c2410c) !important;
+}
+
+.text-theme-primary {
+  color: var(--theme-primary, #ea580c) !important;
+}
+
+.border-theme-primary {
+  border-color: var(--theme-primary, #ea580c) !important;
+}
+
+.bg-theme-light {
+  background-color: var(--theme-primary-light, #fff7ed) !important;
+}
+
+.text-theme-dark {
+  color: var(--theme-primary-dark, #9a3412) !important;
+}
+
+.bg-theme-badge {
+  background-color: var(--theme-badge-bg, #ffedd5) !important;
+}
+
+.text-theme-badge {
+  color: var(--theme-badge-text, #9a3412) !important;
+}
+
+.border-theme-header {
+  border-color: var(--theme-header-border, #fdba74) !important;
+}
+
+/* PWA App-like and Safe-Area Enhancements */
+html {
+  overflow-x: hidden;
+  width: 100%;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  overflow-x: hidden;
+  width: 100%;
+  min-height: 100%;
+  overscroll-behavior-y: contain;
+}
+
+button, a, input, select {
+  touch-action: manipulation;
+}
+
+@supports (padding: env(safe-area-inset-bottom)) {
+  body {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+

@@ -1,0 +1,34 @@
+# Cloud Build configuration for automated testing and container deployment of HARDINKAAM Worker
+steps:
+  # Step 1: Install dependencies using npm ci
+  - name: 'node:20-slim'
+    entrypoint: 'npm'
+    args: ['ci', '--prefer-offline']
+    id: 'install-deps'
+
+  # Step 2: Build Vite assets and production server bundle
+  - name: 'node:20-slim'
+    entrypoint: 'npm'
+    args: ['run', 'build']
+    id: 'build-app'
+
+  # Step 3: Verify build artifacts integrity
+  - name: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ ! -f "dist/index.html" ]; then
+          echo "ERROR: dist/index.html is missing!"
+          exit 1
+        fi
+        echo "SUCCESS: Build verified successfully with dist/ artifacts."
+    id: 'verify-dist'
+
+  # Step 4: Deploy to Firebase Hosting using Application Default Credentials (ADC)
+  - name: 'gcr.io/hardinkaam-5cc6a/firebase:latest'
+    args: ['deploy', '--only', 'hosting', '--project', 'hardinkaam-5cc6a', '--non-interactive']
+    id: 'firebase-adc-deploy'
+
+timeout: '600s'
+options:
+  logging: CLOUD_LOGGING_ONLY

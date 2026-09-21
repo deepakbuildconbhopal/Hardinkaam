@@ -1,0 +1,126 @@
+{
+  "id": "https://hardinkaam.com/",
+  "name": "HARDINKAAM: On-Demand Home Services",
+  "short_name": "HARDINKAAM",
+  "description": "Bhopal's #1 verified on-demand home services, electrician, plumber, carpenter, AC repair, and civil construction platform by Deepak Buildcon.",
+  "start_url": "/?source=pwa_twa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "window-controls-overlay", "minimal-ui"],
+  "orientation": "portrait",
+  "theme_color": "#ea580c",
+  "background_color": "#ffffff",
+  "lang": "hi-IN",
+  "dir": "ltr",
+  "categories": ["lifestyle", "utilities", "business", "shopping"],
+  "prefer_related_applications": false,
+  "related_applications": [
+    {
+      "platform": "play",
+      "id": "com.hardinkaam.app",
+      "url": "https://play.google.com/store/apps/details?id=com.hardinkaam.app"
+    },
+    {
+      "platform": "webapp",
+      "url": "https://hardinkaam.com/manifest.webmanifest"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Electrician Service",
+      "short_name": "Electrician",
+      "description": "Book verified electrician in Bhopal in 60 mins",
+      "url": "/#electrician",
+      "icons": [
+        {
+          "src": "/pwa-192x192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Plumber Service",
+      "short_name": "Plumber",
+      "description": "Book expert plumber for leakages and fittings",
+      "url": "/#plumber",
+      "icons": [
+        {
+          "src": "/pwa-192x192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "AC Repair & Service",
+      "short_name": "AC Repair",
+      "description": "AC servicing, gas charging and installation",
+      "url": "/#ac-repair",
+      "icons": [
+        {
+          "src": "/pwa-192x192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Franchise Portal",
+      "short_name": "Franchise",
+      "description": "Deepak Buildcon all-India franchise opportunity",
+      "url": "/#franchise",
+      "icons": [
+        {
+          "src": "/pwa-192x192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ],
+  "icons": [
+    {
+      "src": "/favicon-32x32.png",
+      "sizes": "32x32",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
