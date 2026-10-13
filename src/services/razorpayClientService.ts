@@ -18,8 +18,8 @@ export interface VerifyPaymentParams {
   idToken: string;
 }
 
-const getWorkerBaseUrl = () => {
-  return (import.meta as any).env?.VITE_CLOUDFLARE_WORKER_URL || 'https://hardinkaam-razorpay-worker.workers.dev';
+const getApiBaseUrl = () => {
+  return (import.meta as any).env?.VITE_API_BASE_URL || 'https://hardinkaam-payment-backend.onrender.com';
 };
 
 // Helper to load Razorpay checkout script dynamically
@@ -40,8 +40,8 @@ export const loadRazorpayScript = (): Promise<boolean> => {
 
 export const razorpayClientService = {
   async createOrder(params: CreateOrderParams) {
-    const workerUrl = getWorkerBaseUrl();
-    const res = await fetch(`${workerUrl}/order`, {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/create-order`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -56,23 +56,23 @@ export const razorpayClientService = {
 
     const data = await res.json();
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to create payment order via Cloudflare Worker');
+      throw new Error(data.error || 'Failed to create payment order via Render backend');
     }
     return data;
   },
 
   async verifyPayment(params: VerifyPaymentParams) {
-    const workerUrl = getWorkerBaseUrl();
-    const res = await fetch(`${workerUrl}/verify`, {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/verify-payment`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${params.idToken}`,
       },
       body: JSON.stringify({
-        orderId: params.orderId,
-        paymentId: params.paymentId,
-        signature: params.signature,
+        razorpay_order_id: params.orderId,
+        razorpay_payment_id: params.paymentId,
+        razorpay_signature: params.signature,
         purpose: params.purpose,
         referenceId: params.referenceId,
       }),
@@ -80,7 +80,7 @@ export const razorpayClientService = {
 
     const data = await res.json();
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Payment verification failed on server');
+      throw new Error(data.error || 'Payment verification failed on Render backend');
     }
     return data;
   },

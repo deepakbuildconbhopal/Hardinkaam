@@ -639,6 +639,17 @@ export const AdminDashboard: React.FC<Props> = ({
 
             <button
               type="button"
+              id="admin-top-razorpay-audit-btn"
+              onClick={() => onSelectTab('admin_payment_test')}
+              className="px-4 py-2.5 rounded-2xl bg-orange-600 hover:bg-orange-500 text-white font-black text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-orange-950/40 border border-orange-400 hover:scale-102"
+              title="Razorpay Test Mode व भुगतान सुरक्षा ऑडिट पैनल"
+            >
+              <ShieldCheck className="w-4 h-4 text-white" />
+              <span>🛡️ Razorpay ऑडिट</span>
+            </button>
+
+            <button
+              type="button"
               id="admin-top-data-explorer-btn"
               onClick={() => onSelectTab('admin_data_explorer')}
               className="px-4 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-indigo-950/40 border border-indigo-400 hover:scale-102"

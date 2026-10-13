@@ -584,6 +584,21 @@ export const AdminPlatformSettings: React.FC<Props> = ({ onOpenZeroDataModal, on
                 ग्राहक का संपूर्ण ऑनलाइन भुगतान सीधे <strong>HARDINKAAM एडमिन के Razorpay खाते</strong> में प्राप्त होता है। सत्यापन उपरांत कमीशन इंजन द्वारा स्वचालित रूप से आंतरिक लेजर (Company, Franchise, Partner, ServiceMan) में आबंटित किया जाता है।
               </p>
 
+              <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-white rounded-xl border border-orange-200">
+                <div className="flex items-center gap-2 text-xs font-bold text-stone-800">
+                  <ShieldCheck className="w-4 h-4 text-orange-600 shrink-0" />
+                  <span>Razorpay Test Mode व भुगतान सुरक्षा ऑडिट पैनल (Diagnostic Panel)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onSelectTab && onSelectTab('admin_payment_test')}
+                  className="px-3 py-1.5 rounded-lg bg-orange-600 text-white text-xs font-bold hover:bg-orange-700 flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                >
+                  <span>ऑडिट पैनल खोलें</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
                 <div>
                   <label className="block font-bold text-stone-700 text-[11px] mb-1">

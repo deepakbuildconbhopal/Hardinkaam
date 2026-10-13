@@ -140,6 +140,7 @@ const AdminTaskPayoutsManager = React.lazy(() => import('./components/admin/Admi
 const AdminJobManager = React.lazy(() => import('./components/admin/AdminJobManager').then(m => ({ default: m.AdminJobManager })));
 const AdminSocialNetworksManager = React.lazy(() => import('./components/admin/AdminSocialNetworksManager').then(m => ({ default: m.AdminSocialNetworksManager })));
 const AdminHardinkaamControlRoom = React.lazy(() => import('./components/admin/AdminHardinkaamControlRoom').then(m => ({ default: m.AdminHardinkaamControlRoom })));
+const AdminRazorpayTestPanel = React.lazy(() => import('./components/admin/AdminRazorpayTestPanel').then(m => ({ default: m.AdminRazorpayTestPanel })));
 
 // Route-based pre-fetching strategy for instant navigation on slow or fast connections
 const PREFETCH_MAP: Record<string, () => Promise<any>> = {
@@ -1369,6 +1370,10 @@ function MainAppContent() {
                 onOpenZeroDataModal={() => setIsZeroDataModalOpen(true)}
                 onSelectTab={handleSelectTab}
               />
+            )}
+
+            {(currentTab === 'admin_payment_test' || currentTab === 'admin_razorpay_audit' || currentTab === 'admin_payment_audit') && (
+              <AdminRazorpayTestPanel />
             )}
 
             {currentTab === 'admin_tax' && (
