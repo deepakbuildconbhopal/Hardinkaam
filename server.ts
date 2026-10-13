@@ -76,6 +76,7 @@ import { LedgerEntry } from './src/types';
 import admin from 'firebase-admin';
 import { initializeApp as initAdminApp, getApps as getAdminApps, getApp as getAdminApp, cert, applicationDefault, App as AdminApp } from 'firebase-admin/app';
 import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import {
   sendPushToUser,
   sendFcmPushToTokens,
@@ -152,16 +153,17 @@ async function authenticateServerInstance() {
 
   try {
     let adminUid = 'admin_deepak_root';
+    const adminAuth = getAdminAuth(adminApp);
     try {
-      const userRecord = await (admin as any).auth().getUserByEmail(adminEmail);
+      const userRecord = await adminAuth.getUserByEmail(adminEmail);
       adminUid = userRecord.uid;
-      await (admin as any).auth().updateUser(adminUid, {
+      await adminAuth.updateUser(adminUid, {
         password: adminPass,
       });
       console.log('[Admin SDK] Existing admin account synchronized successfully.');
     } catch (err: any) {
       if (err.code === 'auth/user-not-found') {
-        const userRecord = await (admin as any).auth().createUser({
+        const userRecord = await adminAuth.createUser({
           email: adminEmail,
           password: adminPass,
           displayName: 'HDK System Admin Agent',
@@ -7793,10 +7795,25 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    const indexHtmlPath = path.join(distPath, 'index.html');
+    if (fs.existsSync(indexHtmlPath)) {
+      app.use(express.static(distPath));
+      app.get('*', (req, res) => {
+        res.sendFile(indexHtmlPath);
+      });
+    } else {
+      app.get('/', (req, res) => {
+        res.json({
+          status: 'ok',
+          service: 'HARDINKAAM Payment Backend',
+          message: 'HARDINKAAM Payment & Webhook API is running.',
+          endpoints: {
+            health: '/api/health',
+            webhook: '/api/razorpay/webhook',
+          },
+        });
+      });
+    }
   }
 
   const server = app.listen(PORT, '0.0.0.0', () => {

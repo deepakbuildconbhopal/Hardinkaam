@@ -5031,6 +5031,7 @@ function createAICallingRouter(requireAdminAuth2) {
 var import_firebase_admin2 = __toESM(require("firebase-admin"), 1);
 var import_app2 = require("firebase-admin/app");
 var import_firestore9 = require("firebase-admin/firestore");
+var import_auth2 = require("firebase-admin/auth");
 
 // server/fcmNotificationService.ts
 var import_firebase_admin = __toESM(require("firebase-admin"), 1);
@@ -5638,16 +5639,17 @@ async function authenticateServerInstance() {
   }
   try {
     let adminUid = "admin_deepak_root";
+    const adminAuth = (0, import_auth2.getAuth)(adminApp);
     try {
-      const userRecord = await import_firebase_admin2.default.auth().getUserByEmail(adminEmail);
+      const userRecord = await adminAuth.getUserByEmail(adminEmail);
       adminUid = userRecord.uid;
-      await import_firebase_admin2.default.auth().updateUser(adminUid, {
+      await adminAuth.updateUser(adminUid, {
         password: adminPass
       });
       console.log("[Admin SDK] Existing admin account synchronized successfully.");
     } catch (err) {
       if (err.code === "auth/user-not-found") {
-        const userRecord = await import_firebase_admin2.default.auth().createUser({
+        const userRecord = await adminAuth.createUser({
           email: adminEmail,
           password: adminPass,
           displayName: "HDK System Admin Agent"
@@ -11713,10 +11715,25 @@ async function startServer() {
     app2.use(vite.middlewares);
   } else {
     const distPath = import_path2.default.join(process.cwd(), "dist");
-    app2.use(import_express2.default.static(distPath));
-    app2.get("*", (req, res) => {
-      res.sendFile(import_path2.default.join(distPath, "index.html"));
-    });
+    const indexHtmlPath = import_path2.default.join(distPath, "index.html");
+    if (import_fs2.default.existsSync(indexHtmlPath)) {
+      app2.use(import_express2.default.static(distPath));
+      app2.get("*", (req, res) => {
+        res.sendFile(indexHtmlPath);
+      });
+    } else {
+      app2.get("/", (req, res) => {
+        res.json({
+          status: "ok",
+          service: "HARDINKAAM Payment Backend",
+          message: "HARDINKAAM Payment & Webhook API is running.",
+          endpoints: {
+            health: "/api/health",
+            webhook: "/api/razorpay/webhook"
+          }
+        });
+      });
+    }
   }
   const server = app2.listen(PORT, "0.0.0.0", () => {
     console.log(`HARDINKAAM Server running on http://0.0.0.0:${PORT}`);
