@@ -1,5 +1,5 @@
 {
-  "id": "https://hardinkaam.com/",
+  "id": "https://www.hardinkaam.online/",
   "name": "HARDINKAAM: On-Demand Home Services",
   "short_name": "HARDINKAAM",
   "description": "Bhopal's #1 verified on-demand home services, electrician, plumber, carpenter, AC repair, and civil construction platform by Deepak Buildcon.",
@@ -22,7 +22,7 @@
     },
     {
       "platform": "webapp",
-      "url": "https://hardinkaam.com/manifest.webmanifest"
+      "url": "https://www.hardinkaam.online/manifest.webmanifest"
     }
   ],
   "shortcuts": [

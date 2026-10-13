@@ -48,11 +48,12 @@ export const ExtraChargesManager: React.FC<ExtraChargesManagerProps> = ({
   const charges: ExtraChargeItem[] = Array.isArray(booking.extraCharges) ? booking.extraCharges : [];
   const isPro = userRole === 'service_man';
   const isCustomer = userRole === 'customer';
-  const isBookingActive = booking.status === 'in_progress' || booking.status === 'work_started' || booking.trackingStatus === 'work_started';
+  const allowedStatuses = ['arrived', 'otp_pending', 'extra_charges_pending', 'on_the_way', 'arriving', 'in_progress', 'work_started', 'accepted'];
+  const isBookingActive = allowedStatuses.includes(booking.status) || allowedStatuses.includes(booking.trackingStatus || '');
 
-  const pendingCharges = charges.filter((c) => c.status === 'pending');
-  const approvedCharges = charges.filter((c) => c.status === 'approved');
-  const rejectedCharges = charges.filter((c) => c.status === 'rejected');
+  const pendingCharges = charges.filter((c) => (c.approvalStatus || c.status) === 'pending');
+  const approvedCharges = charges.filter((c) => (c.approvalStatus || c.status) === 'approved');
+  const rejectedCharges = charges.filter((c) => (c.approvalStatus || c.status) === 'rejected');
 
   const calculatedTotal = Math.max(1, quantity) * Math.max(0, Number(unitPrice) || 0);
 

@@ -10,8 +10,10 @@ import {
   where,
   onSnapshot,
   serverTimestamp,
+  limit,
 } from 'firebase/firestore';
 import { db, auth } from '../firebase/config';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../utils/sparkQuotaGuard';
 import {
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
@@ -26,6 +28,7 @@ import {
 } from '../types';
 import { generateFranchiseCode, normalizeFranchiseCode } from '../utils/franchiseCode';
 import { logAuditEvent } from './auditService';
+import { getSecondaryAuth } from '../utils/secureCredentials';
 
 export const DEFAULT_PERMISSIONS: FranchisePartnerPermissions = {
   manageCustomers: true,
@@ -43,7 +46,7 @@ export const DEFAULT_PERMISSIONS: FranchisePartnerPermissions = {
  */
 export async function getAllFranchiseCodes(): Promise<string[]> {
   try {
-    const snap = await getDocs(collection(db, 'franchise_partners'));
+    const snap = await getDocs(query(collection(db, 'franchise_partners'), limit(100)));
     const codes: string[] = [];
     snap.forEach((d) => {
       const data = d.data();
@@ -123,10 +126,11 @@ export async function createFranchisePartner(
     let authUid = partnerDocId;
     if (actualPassword && actualPassword.length >= 6) {
       try {
-        // Try creating user in Firebase Auth.
-        // We will catch error if email already exists or handle secondary auth
-        const cred = await createUserWithEmailAndPassword(auth, normalizedEmail, actualPassword);
+        // Use isolated secondary auth app so current admin is not logged out
+        const secondaryAuth = getSecondaryAuth();
+        const cred = await createUserWithEmailAndPassword(secondaryAuth, normalizedEmail, actualPassword);
         authUid = cred.user.uid;
+        await signOut(secondaryAuth);
       } catch (authErr: any) {
         if (authErr?.code === 'auth/email-already-in-use') {
           // Account already exists in auth, use generated doc id or existing account
@@ -550,7 +554,7 @@ export async function getFranchisePartnerByCode(
 ): Promise<FranchisePartner | null> {
   try {
     const normalized = normalizeFranchiseCode(franchiseCode);
-    const q = query(collection(db, 'franchise_partners'), where('franchiseCode', '==', normalized));
+    const q = query(collection(db, 'franchise_partners'), where('franchiseCode', '==', normalized), limit(1));
     const snap = await getDocs(q);
     if (!snap.empty) {
       const docSnap = snap.docs[0];
@@ -571,7 +575,7 @@ export async function getFranchisePartnerByEmail(
 ): Promise<FranchisePartner | null> {
   try {
     const normalized = email.trim().toLowerCase();
-    const q = query(collection(db, 'franchise_partners'), where('email', '==', normalized));
+    const q = query(collection(db, 'franchise_partners'), where('email', '==', normalized), limit(1));
     const snap = await getDocs(q);
     if (!snap.empty) {
       const docSnap = snap.docs[0];
@@ -590,15 +594,23 @@ export async function getFranchisePartnerByEmail(
 export function subscribeAllFranchisePartners(
   callback: (partners: FranchisePartner[]) => void
 ) {
+  if (isResourceExhausted()) {
+    callback([]);
+    return () => {};
+  }
+
   return onSnapshot(
-    collection(db, 'franchise_partners'),
+    query(collection(db, 'franchise_partners'), limit(50)),
     (snap) => {
       const list: FranchisePartner[] = [];
       snap.forEach((d) => list.push({ id: d.id, ...d.data() } as FranchisePartner));
       list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       callback(list);
     },
-    (err) => console.warn('Franchise partners listener notice:', err)
+    (err) => {
+      console.warn('Franchise partners listener notice:', err);
+      checkAndHandleQuotaError(err);
+    }
   );
 }
 
@@ -749,14 +761,14 @@ export async function updateDistrictConfig(
  */
 export async function ensureDefaultFranchisePartners(): Promise<void> {
   try {
-    const snap = await getDocs(collection(db, 'franchise_partners'));
+    const snap = await getDocs(query(collection(db, 'franchise_partners'), limit(1)));
     if (!snap.empty) return; // already seeded
 
     const defaults: Partial<CreateFranchisePartnerParams>[] = [
       {
         name: 'Bhopal Central Franchise Admin',
         email: 'bhopal.franchise@hardinkaam.in',
-        phone: '9826012345',
+        phone: '6267546945',
         assignedDistrictId: 'bhopal',
         assignedDistrictName: 'Bhopal',
         stateName: 'Madhya Pradesh',

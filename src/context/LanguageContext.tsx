@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { SupportedLanguage, SUPPORTED_LANGUAGES, TRANSLATIONS } from '../utils/translations';
 
 interface LanguageContextType {
@@ -27,7 +27,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return 'hi'; // Default Hindi
   });
 
-  const setLanguage = (newLang: SupportedLanguage) => {
+  const setLanguage = useCallback((newLang: SupportedLanguage) => {
     setLanguageState(newLang);
     try {
       localStorage.setItem(LANGUAGE_STORAGE_KEY, newLang);
@@ -35,13 +35,13 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch (e) {
       console.warn('Language storage save notice:', e);
     }
-  };
+  }, []);
 
   useEffect(() => {
     document.documentElement.lang = language;
   }, [language]);
 
-  const t = (key: string, fallback?: string): string => {
+  const t = useCallback((key: string, fallback?: string): string => {
     const langDict = TRANSLATIONS[language];
     if (langDict && langDict[key]) {
       return langDict[key];
@@ -54,9 +54,9 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return TRANSLATIONS['en'][key];
     }
     return fallback || key;
-  };
+  }, [language]);
 
-  const translateCategory = (catIdOrName: string): string => {
+  const translateCategory = useCallback((catIdOrName: string): string => {
     const key = catIdOrName.toLowerCase().startsWith('cat_')
       ? catIdOrName.toLowerCase()
       : `cat_${catIdOrName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
@@ -65,24 +65,27 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (translated !== key) return translated;
 
     // Common category fallbacks
-    const match = Object.keys(TRANSLATIONS[language]).find(
+    const match = Object.keys(TRANSLATIONS[language] || {}).find(
       (k) => k.startsWith('cat_') && catIdOrName.toLowerCase().includes(k.replace('cat_', ''))
     );
-    if (match) return TRANSLATIONS[language][match];
+    if (match && TRANSLATIONS[language]) return TRANSLATIONS[language][match];
 
     return catIdOrName;
-  };
+  }, [language, t]);
+
+  const contextValue = useMemo<LanguageContextType>(
+    () => ({
+      language,
+      setLanguage,
+      t,
+      translateCategory,
+      isHindi: language === 'hi',
+    }),
+    [language, setLanguage, t, translateCategory]
+  );
 
   return (
-    <LanguageContext.Provider
-      value={{
-        language,
-        setLanguage,
-        t,
-        translateCategory,
-        isHindi: language === 'hi',
-      }}
-    >
+    <LanguageContext.Provider value={contextValue}>
       {children}
     </LanguageContext.Provider>
   );

@@ -416,7 +416,7 @@ export const CustomerBookingLiveMapCard: React.FC<Props> = ({
               )}
               <span>{trackingErrorInfo.message}</span>
             </div>
-            {(trackingErrorInfo.type === 'gps_off' || trackingErrorInfo.type === 'gps_denied') && (
+            {(trackingErrorInfo.type === 'gps_off' || trackingErrorInfo.type === 'gps_permission_denied') && (
               <button
                 type="button"
                 onClick={requestCustomerGps}

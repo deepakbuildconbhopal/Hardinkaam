@@ -21,6 +21,7 @@ import {
   Layers,
   Eye,
   UploadCloud,
+  History,
 } from 'lucide-react';
 import {
   FranchisePartner,

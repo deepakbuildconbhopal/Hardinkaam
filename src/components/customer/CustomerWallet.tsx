@@ -1,10 +1,38 @@
 import React, { useState, useEffect } from 'react';
-import { Wallet, Plus, ArrowDownLeft, ArrowUpRight, ShieldCheck, Tag, Sparkles, CreditCard, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import {
+  Wallet,
+  Plus,
+  ArrowDownLeft,
+  ArrowUpRight,
+  ShieldCheck,
+  Tag,
+  Sparkles,
+  CreditCard,
+  AlertCircle,
+  CheckCircle2,
+  Award,
+  Share2,
+  Copy,
+  Check,
+  Gift,
+  Trophy,
+  ArrowRight,
+  History,
+  RotateCcw,
+} from 'lucide-react';
+import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { db, auth } from '../../firebase/config';
 import { useAuth } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
 import { AdSenseBanner } from '../ads/AdSenseBanner';
-import { processRazorpayPayment } from '../../services/razorpayService';
+import {
+  getCustomerRewardWallet,
+  getRewardSettings,
+  CustomerRewardWallet,
+  RewardSettings,
+  getCustomerReferrals,
+  CustomerReferralRecord,
+} from '../../services/rewardService';
 
 interface CustomerWalletItem {
   id: string;
@@ -16,32 +44,29 @@ interface CustomerWalletItem {
 
 export const CustomerWallet: React.FC = () => {
   const { currentUser, userProfile } = useAuth();
-  const [balance, setBalance] = useState<number>(850);
-  const [transactions, setTransactions] = useState<CustomerWalletItem[]>([
-    {
-      id: 'tx_1',
-      amount: 500,
-      type: 'credit',
-      description: 'Wallet Recharge via UPI',
-      timestamp: new Date(Date.now() - 3600000 * 24).toISOString(),
-    },
-    {
-      id: 'tx_2',
-      amount: 150,
-      type: 'credit',
-      description: 'Welcome Bonus Cash',
-      timestamp: new Date(Date.now() - 3600000 * 48).toISOString(),
-    },
-  ]);
+  const { t, language } = useLanguage();
+  const [balance, setBalance] = useState<number>(0);
+  const [transactions, setTransactions] = useState<CustomerWalletItem[]>([]);
+  const [referralsList, setReferralsList] = useState<CustomerReferralRecord[]>([]);
+
+  // Reward Wallet state
+  const [rewardWallet, setRewardWallet] = useState<CustomerRewardWallet | null>(null);
+  const [rewardSettings, setRewardSettings] = useState<RewardSettings | null>(null);
+
   const [addAmount, setAddAmount] = useState<string>('500');
   const [isAdding, setIsAdding] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [paymentSuccessMsg, setPaymentSuccessMsg] = useState<string | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  const userId = currentUser?.uid || userProfile?.id || 'guest_user';
+  const referralCode = 'HDK-' + (userId.substring(0, 6).toUpperCase());
+  const referralLink = `https://hardinkaam.in/signup?ref=${referralCode}`;
 
   useEffect(() => {
-    if (!currentUser) return;
-    const fetchWallet = async () => {
+    if (!auth.currentUser || !currentUser) return;
+    const fetchWallets = async () => {
       try {
         const walletDoc = await getDoc(doc(db, 'wallets', currentUser.uid));
         if (walletDoc.exists()) {
@@ -49,11 +74,53 @@ export const CustomerWallet: React.FC = () => {
           if (data.balance !== undefined) setBalance(data.balance);
           if (data.transactions) setTransactions(data.transactions);
         }
+
+        const rw = await getCustomerRewardWallet(currentUser.uid);
+        setRewardWallet(rw);
+
+        const rs = await getRewardSettings();
+        setRewardSettings(rs);
+
+        const refs = await getCustomerReferrals(currentUser.uid);
+        setReferralsList(refs);
       } catch (err) {
         console.warn('Wallet fetch notice:', err);
       }
     };
-    fetchWallet();
+    fetchWallets();
+
+    if (!auth.currentUser || !currentUser?.uid || currentUser.uid === 'admin_deepak_root') return;
+
+    // Real-time listener for reward wallet updates
+    const walletRef = doc(db, 'reward_wallets', currentUser.uid);
+    const unsub = onSnapshot(
+      walletRef,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as any;
+          const ptsBal = data.pointsBalance !== undefined ? Number(data.pointsBalance) : Number(data.availablePoints || 0);
+          const conversion = 10;
+          setRewardWallet({
+            customerId: currentUser.uid,
+            pointsBalance: Math.max(0, ptsBal),
+            availablePoints: Math.max(0, ptsBal),
+            reservedPoints: Math.max(0, Number(data.reservedPoints || 0)),
+            totalEarned: Number(data.totalEarned || 0),
+            totalRedeemed: Number(data.totalRedeemed || 0),
+            totalReversed: Number(data.totalReversed || 0),
+            totalExpired: Number(data.totalExpired || 0),
+            estimatedRupeeValue: Math.round((ptsBal / conversion) * 10) / 10,
+            transactions: Array.isArray(data.transactions) ? data.transactions : [],
+            updatedAt: data.updatedAt || new Date().toISOString(),
+          });
+        }
+      },
+      (err) => {
+        console.warn('Customer reward wallet listener notice:', err.message);
+      }
+    );
+
+    return () => unsub();
   }, [currentUser]);
 
   const handleAddFunds = async () => {
@@ -67,109 +134,70 @@ export const CustomerWallet: React.FC = () => {
     setPaymentSuccessMsg(null);
     setIsAdding(true);
 
-    try {
-      // Initiate Razorpay Standard Checkout
-      await processRazorpayPayment({
-        amount: num,
-        currency: 'INR',
-        name: 'HARDINKAAM Wallet Recharge',
-        description: `Add ₹${num} to HARDINKAAM Wallet`,
-        receipt: `wal_${Date.now()}_${currentUser?.uid?.substring(0, 5) || 'cust'}`,
-        prefill: {
-          name: userProfile?.fullName || currentUser?.displayName || 'Customer',
-          email: currentUser?.email || '',
-          contact: userProfile?.phoneNumber || '',
-        },
-        notes: {
-          type: 'wallet_recharge',
-          userId: currentUser?.uid || 'guest',
-        },
-        onSuccess: async (res) => {
-          const newBal = balance + num;
-          const newTx: CustomerWalletItem = {
-            id: 'tx_' + res.payment_id,
-            amount: num,
-            type: 'credit',
-            description: `Razorpay Online Recharge (${res.payment_id})`,
-            timestamp: new Date().toISOString(),
-          };
-
-          const updatedTxList = [newTx, ...transactions];
-
-          try {
-            if (currentUser) {
-              await setDoc(
-                doc(db, 'wallets', currentUser.uid),
-                {
-                  balance: newBal,
-                  transactions: updatedTxList,
-                  lastPaymentId: res.payment_id,
-                  lastOrderId: res.order_id,
-                  updatedAt: new Date().toISOString(),
-                },
-                { merge: true }
-              );
-            }
-            setBalance(newBal);
-            setTransactions(updatedTxList);
-            setShowAddModal(false);
-            setPaymentSuccessMsg(`₹${num} सफलतापूर्वक आपके वॉलेट में जोड़ दिए गए हैं! (Ref: ${res.payment_id})`);
-            setTimeout(() => setPaymentSuccessMsg(null), 7000);
-          } catch (dbErr) {
-            console.error('Wallet update error:', dbErr);
-            setBalance(newBal);
-            setTransactions(updatedTxList);
-            setShowAddModal(false);
-          } finally {
-            setIsAdding(false);
-          }
-        },
-        onFailure: (err) => {
-          console.error('Razorpay Payment Failed:', err);
-          setPaymentError(err.description || err.reason || 'Payment failed or declined by bank. Please retry.');
-          setIsAdding(false);
-        },
-        onDismiss: () => {
-          setIsAdding(false);
-        },
-      });
-    } catch (err: any) {
-      console.error('Razorpay checkout initiation error:', err);
-      setPaymentError(err.message || 'Could not initiate Razorpay checkout.');
-      setIsAdding(false);
-    }
+    setPaymentError('ऑनलाइन वॉलेट रिचार्ज (Razorpay) वर्तमान में बंद है। सहायता के लिए सपोर्ट से संपर्क करें।');
+    setIsAdding(false);
   };
+
+  const handleCopyReferral = () => {
+    navigator.clipboard.writeText(referralLink);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 3000);
+  };
+
+  const handleShareWhatsApp = () => {
+    const shareText = encodeURIComponent(
+      `🎉 HARDINKAAM होम-सर्विसेज ऐप पर मेरा रेफरल कोड ${referralCode} उपयोग करें और अपनी पहली बुकिंग पर विशेष छूट पाएं!\nलिंक: ${referralLink}`
+    );
+    window.open(`https://api.whatsapp.com/send?text=${shareText}`, '_blank');
+  };
+
+  const isHindi = language === 'hi';
 
   return (
     <div className="space-y-6 pb-20 max-w-4xl mx-auto">
       <div>
         <h1 className="text-xl sm:text-2xl font-black text-stone-900 tracking-tight">
-          HARDINKAAM Wallet
+          {isHindi ? 'HARDINKAAM वॉलेट व रिवॉर्ड पॉइंट्स' : 'HARDINKAAM Wallet & Reward Points'}
         </h1>
         <p className="text-xs text-stone-500 mt-0.5">
-          One-click instant payment, guaranteed refunds &amp; promotional cashbacks
+          {isHindi
+            ? 'कस्टमर रिवॉर्ड वॉलेट, रेफर एंड अर्न, और एडमिन रेज़रपे सुरक्षित भुगतान प्रणाली'
+            : 'Customer Reward Wallet, Refer & Earn, and Admin Razorpay Payment System'}
         </p>
+      </div>
+
+      {/* Official Payment Policy Notice */}
+      <div className="p-3.5 rounded-2xl bg-blue-50 border border-blue-200 text-blue-900 text-xs flex items-center gap-3">
+        <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0" />
+        <div>
+          <span className="font-bold">{isHindi ? 'आधिकारिक भुगतान नीति: ' : 'Official Payment Policy: '}</span>
+          <span>
+            {isHindi
+              ? 'सभी ग्राहक सेवा बुकिंग भुगतान व रिचार्ज केवल HARDINKAAM एडमिन के Razorpay गेटवे पर जाते हैं। रिवॉर्ड पॉइंट्स लॉयल्टी क्रेडिट हैं (1,000 pts = ₹100), डायरेक्ट कैश नहीं।'
+              : "All customer service booking payments and recharges go exclusively to HARDINKAAM Admin's Razorpay Gateway. Reward points represent loyalty credits (1,000 pts = ₹100), not direct cash."}
+          </span>
+        </div>
       </div>
 
       {/* Success / Error alerts */}
       {paymentSuccessMsg && (
-        <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center gap-2.5 animate-in fade-in">
+        <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center gap-2.5">
           <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
           <span>{paymentSuccessMsg}</span>
         </div>
       )}
 
       {paymentError && (
-        <div className="p-4 rounded-2xl bg-rose-50 border border-rose-300 text-rose-900 text-xs font-bold flex items-center justify-between gap-2.5 animate-in fade-in">
+        <div className="p-4 rounded-2xl bg-rose-50 border border-rose-300 text-rose-900 text-xs font-bold flex items-center justify-between gap-2.5">
           <div className="flex items-center gap-2.5">
             <AlertCircle className="w-5 h-5 text-rose-600 flex-shrink-0" />
             <span>{paymentError}</span>
           </div>
           <button
             onClick={() => setPaymentError(null)}
-            className="text-stone-400 hover:text-stone-600 text-xs px-2 py-1"
+            className="text-stone-400 hover:text-stone-600 text-xs px-2 py-1 cursor-pointer"
           >
-            बंद करें
+            {isHindi ? 'बंद करें' : 'Close'}
           </button>
         </div>
       )}
@@ -183,9 +211,9 @@ export const CustomerWallet: React.FC = () => {
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-6">
           <div>
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 text-orange-300 text-xs font-semibold mb-3">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Instant 1-Click Checkout
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Admin Razorpay Instant Checkout
             </div>
-            <span className="text-xs text-stone-300 block font-medium">Available Balance</span>
+            <span className="text-xs text-stone-300 block font-medium">Available Cash Balance</span>
             <div className="flex items-baseline gap-1 mt-1">
               <span className="text-3xl sm:text-5xl font-black text-white">₹{balance}</span>
               <span className="text-xs text-stone-400 font-semibold">INR</span>
@@ -206,29 +234,249 @@ export const CustomerWallet: React.FC = () => {
         </div>
       </div>
 
-      {/* Promotions & Offers */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200 flex items-start gap-3">
-          <div className="p-2.5 rounded-xl bg-amber-100 text-amber-800">
-            <Tag className="w-5 h-5" />
+      {/* ================= CUSTOMER REWARD POINTS WALLET ================= */}
+      <div className="bg-white rounded-3xl border border-stone-200 p-6 shadow-xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold shrink-0">
+              <Award className="w-6 h-6" />
+            </div>
+            <div>
+              <h2 className="text-base font-black text-stone-900">
+                {isHindi ? 'कस्टमर रिवॉर्ड पॉइंट्स वॉलेट' : 'Customer Reward Points Wallet'}
+              </h2>
+              <p className="text-xs text-stone-500">
+                {isHindi
+                  ? 'कन्वर्ज़न दर: 1,000 Points = ₹100 सर्विस पर छूट'
+                  : 'Conversion Rule: 1,000 Points = ₹100 Discount on Services'}
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 className="text-xs font-bold text-amber-900">Flat ₹100 Cashback on ₹1000+ Recharge</h3>
-            <p className="text-[11px] text-amber-700 mt-0.5">
-              Use code <strong className="font-mono font-bold">HKRECHARGE</strong> during payment checkout.
+          <div className="text-left sm:text-right bg-amber-50/80 sm:bg-transparent p-3 sm:p-0 rounded-2xl border sm:border-0 border-amber-200">
+            <span className="text-xs text-stone-400 block font-medium">{t('pointsUsedDiscount', 'Estimated Value')}</span>
+            <span className="text-lg font-black text-amber-600">
+              ₹{rewardWallet?.estimatedRupeeValue || Math.round((((rewardWallet?.pointsBalance ?? rewardWallet?.availablePoints) || 250) / 10) * 10) / 10}
+            </span>
+          </div>
+        </div>
+
+        {/* 4 Points Balance Breakdown Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200">
+            <span className="text-[11px] font-bold text-amber-900 uppercase">
+              {t('availableRewards', 'Available Points')}
+            </span>
+            <p className="text-2xl font-black text-amber-700 mt-1">
+              {(rewardWallet?.pointsBalance ?? rewardWallet?.availablePoints ?? 250).toLocaleString('en-IN')}
+            </p>
+          </div>
+          <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200">
+            <span className="text-[11px] font-bold text-stone-600 uppercase">Total Earned</span>
+            <p className="text-2xl font-black text-stone-900 mt-1">
+              {(rewardWallet?.totalEarned || 250).toLocaleString('en-IN')}
+            </p>
+          </div>
+          <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200">
+            <span className="text-[11px] font-bold text-stone-600 uppercase">Total Redeemed</span>
+            <p className="text-2xl font-black text-stone-900 mt-1">
+              {(rewardWallet?.totalRedeemed || 0).toLocaleString('en-IN')}
+            </p>
+          </div>
+          <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200">
+            <span className="text-[11px] font-bold text-stone-600 uppercase">Reserved Points</span>
+            <p className="text-2xl font-black text-purple-700 mt-1">
+              {(rewardWallet?.reservedPoints || 0).toLocaleString('en-IN')}
             </p>
           </div>
         </div>
 
-        <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200 flex items-start gap-3">
-          <div className="p-2.5 rounded-xl bg-emerald-100 text-emerald-800">
-            <ShieldCheck className="w-5 h-5" />
+        {/* Use Rewards Explanation Banner */}
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Gift className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <h4 className="text-xs font-black text-stone-900 uppercase">
+                {t('useRewards', 'Use Rewards on Booking')}
+              </h4>
+              <p className="text-[11px] text-stone-600">
+                {isHindi
+                  ? 'सर्विस बुक करते समय चेकआउट स्टेप पर "रिवॉर्ड पॉइंट्स का उपयोग करें" चुनें और तुरंत छूट पाएं।'
+                  : 'Select "Use Reward Points" during booking checkout to redeem points for an instant service discount.'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Reward Transaction History */}
+        <div className="pt-2">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs font-bold text-stone-800 uppercase tracking-wider flex items-center gap-1.5">
+              <History className="w-4 h-4 text-amber-600" />
+              <span>{t('rewardHistory', 'Reward Points Transaction History')}</span>
+            </h3>
+            <span className="text-[10px] text-stone-400 font-semibold">
+              {(rewardWallet?.transactions || []).length} Records
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {(rewardWallet?.transactions || []).length === 0 ? (
+              <div className="py-6 text-center text-stone-400 text-xs">
+                {isHindi ? 'कोई रिवॉर्ड लेनदेन दर्ज नहीं है।' : 'No reward transactions recorded yet.'}
+              </div>
+            ) : (
+              (rewardWallet?.transactions || []).map((t) => {
+                const isDebit = t.type === 'REDEMPTION' || (t.points && t.points < 0);
+                return (
+                  <div
+                    key={t.id || t.transactionId}
+                    className="p-3.5 rounded-2xl bg-stone-50 hover:bg-stone-100/80 border border-stone-200 flex items-center justify-between text-xs transition-colors animate-in fade-in slide-in-from-bottom-2 duration-500"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-stone-900">{t.description || `${t.type} Points`}</span>
+                        <span
+                          className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                            t.type === 'BOOKING'
+                              ? 'bg-amber-100 text-amber-800'
+                              : t.type === 'REFERRAL'
+                              ? 'bg-orange-100 text-orange-800'
+                              : t.type === 'REDEMPTION'
+                              ? 'bg-rose-100 text-rose-800'
+                              : t.type === 'REVERSAL'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-purple-100 text-purple-800'
+                          }`}
+                        >
+                          {t.type}
+                        </span>
+                        {t.status && (
+                          <span className="text-[9px] font-bold text-stone-500 uppercase">
+                            ({t.status})
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-stone-400 font-mono">
+                        <span>{t.transactionId || t.referenceId}</span>
+                        {t.createdAt && (
+                          <span>• {new Date(t.createdAt).toLocaleDateString([], { dateStyle: 'medium' })}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0 pl-3">
+                      <span
+                        className={`font-black text-sm block ${
+                          isDebit ? 'text-rose-600' : 'text-amber-600'
+                        }`}
+                      >
+                        {isDebit ? '-' : '+'}{t.points ?? t.amountPoints ?? 0} Pts
+                      </span>
+                      <span className="text-[10px] text-stone-400">
+                        ₹{t.rupeeValue ?? t.pointValue ?? 0} value
+                      </span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ================= REFER & EARN SECTION ================= */}
+      <div className="bg-gradient-to-r from-orange-600 via-amber-600 to-orange-700 text-white rounded-3xl p-6 shadow-xl space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-2xl bg-white/25 flex items-center justify-center font-bold text-white shrink-0">
+            <Share2 className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="text-xs font-bold text-emerald-900">100% Safe &amp; Direct Refunds</h3>
-            <p className="text-[11px] text-emerald-700 mt-0.5">
-              Any booking cancellations are immediately credited back to your wallet with zero deduction.
+            <h2 className="text-base font-black text-white">
+              {t('referAndEarn', 'Refer Friends & Earn Reward Points')}
+            </h2>
+            <p className="text-xs text-amber-100">
+              {t(
+                'shareReferralPrompt',
+                'Earn +500 Reward Points when your friend completes their first verified booking!'
+              )}
             </p>
+          </div>
+        </div>
+
+        <div className="bg-black/20 p-4 rounded-2xl border border-white/20 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div>
+            <span className="text-[10px] uppercase font-bold text-amber-200 block">
+              {t('yourReferralCode', 'Your Personal Referral Link')}
+            </span>
+            <code className="text-xs font-mono font-bold text-white break-all">{referralLink}</code>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleCopyReferral}
+              className="px-4 py-2.5 rounded-xl bg-white text-stone-900 font-bold text-xs flex items-center gap-1.5 cursor-pointer hover:bg-amber-100 transition shrink-0"
+            >
+              {copiedLink ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+              <span>{copiedLink ? t('linkCopied', 'Copied Link!') : t('copyLink', 'Copy Link')}</span>
+            </button>
+            <button
+              onClick={handleShareWhatsApp}
+              className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer transition shadow-md shrink-0"
+            >
+              <span>WhatsApp</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Referral Stats & Referred Friends List */}
+        <div className="bg-white/10 rounded-2xl p-4 border border-white/15 space-y-3">
+          <div className="grid grid-cols-3 gap-2 text-center border-b border-white/10 pb-3">
+            <div>
+              <span className="text-[10px] uppercase font-bold text-amber-200 block">Total Referred</span>
+              <span className="text-base font-black text-white">{referralsList.length}</span>
+            </div>
+            <div>
+              <span className="text-[10px] uppercase font-bold text-amber-200 block">Rewarded</span>
+              <span className="text-base font-black text-emerald-300">
+                {referralsList.filter((r) => r.status === 'REWARDED').length}
+              </span>
+            </div>
+            <div>
+              <span className="text-[10px] uppercase font-bold text-amber-200 block">Points Earned</span>
+              <span className="text-base font-black text-amber-200">
+                +{referralsList.filter((r) => r.status === 'REWARDED').reduce((sum, r) => sum + (r.rewardPoints || 500), 0)} pts
+              </span>
+            </div>
+          </div>
+
+          <div>
+            <h4 className="text-xs font-bold text-amber-100 mb-2">Your Referred Friends ({referralsList.length})</h4>
+            {referralsList.length === 0 ? (
+              <p className="text-[11px] text-amber-200 italic">No friends referred yet. Share your link above to start earning rewards!</p>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {referralsList.map((refItem) => (
+                  <div key={refItem.id} className="bg-black/20 px-3 py-2.5 rounded-xl flex items-center justify-between text-xs">
+                    <div>
+                      <span className="font-bold text-white block">Friend ID: #{refItem.referredCustomerId.substring(0, 6)}</span>
+                      <span className="text-[10px] text-amber-200">
+                        {new Date(refItem.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <div>
+                      {refItem.status === 'REWARDED' ? (
+                        <span className="px-2.5 py-1 rounded-full bg-emerald-500/30 text-emerald-200 text-[10px] font-bold border border-emerald-400/30">
+                          Rewarded (+{refItem.rewardPoints || 500} pts) 🎉
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-full bg-amber-500/30 text-amber-200 text-[10px] font-bold border border-amber-400/30">
+                          Pending First Booking ⏳
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -244,10 +492,10 @@ export const CustomerWallet: React.FC = () => {
 
       {/* Transaction History */}
       <div className="bg-white rounded-3xl border border-stone-200 p-5 shadow-xs">
-        <h2 className="text-sm font-bold text-stone-900 mb-4">Recent Transactions</h2>
+        <h2 className="text-sm font-bold text-stone-900 mb-4">Cash Wallet Recharge History</h2>
 
         {transactions.length === 0 ? (
-          <div className="py-8 text-center text-stone-400 text-xs">No transactions recorded yet.</div>
+          <div className="py-8 text-center text-stone-400 text-xs">No cash transactions recorded yet.</div>
         ) : (
           <div className="divide-y divide-stone-100">
             {transactions.map((tx) => (
@@ -258,11 +506,7 @@ export const CustomerWallet: React.FC = () => {
                       tx.type === 'credit' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
                     }`}
                   >
-                    {tx.type === 'credit' ? (
-                      <ArrowDownLeft className="w-4 h-4" />
-                    ) : (
-                      <ArrowUpRight className="w-4 h-4" />
-                    )}
+                    {tx.type === 'credit' ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-stone-800">{tx.description}</h4>
@@ -275,11 +519,7 @@ export const CustomerWallet: React.FC = () => {
                   </div>
                 </div>
 
-                <div
-                  className={`text-xs font-black ${
-                    tx.type === 'credit' ? 'text-emerald-600' : 'text-stone-900'
-                  }`}
-                >
+                <div className={`text-xs font-black ${tx.type === 'credit' ? 'text-emerald-600' : 'text-stone-900'}`}>
                   {tx.type === 'credit' ? '+' : '-'}₹{tx.amount}
                 </div>
               </div>
@@ -293,7 +533,7 @@ export const CustomerWallet: React.FC = () => {
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-6 border border-stone-200 animate-in fade-in zoom-in-95 duration-150">
             <h3 className="font-bold text-base text-stone-900 mb-1">Add Money to Wallet</h3>
-            <p className="text-xs text-stone-500 mb-4">Choose recharge amount via UPI or Cards</p>
+            <p className="text-xs text-stone-500 mb-4">Via HARDINKAAM Admin Razorpay Gateway</p>
 
             <div className="space-y-4">
               <div className="grid grid-cols-3 gap-2">
@@ -327,15 +567,6 @@ export const CustomerWallet: React.FC = () => {
                 </div>
               </div>
 
-              <div className="p-3 rounded-2xl bg-orange-50/70 border border-orange-200/80 flex items-center justify-between text-[11px] text-stone-600">
-                <span className="flex items-center gap-1.5 font-bold text-stone-800">
-                  <CreditCard className="w-3.5 h-3.5 text-orange-600" /> Razorpay Standard
-                </span>
-                <span className="font-mono text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full text-[10px] font-black">
-                  UPI • Cards • NetBanking
-                </span>
-              </div>
-
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -356,7 +587,7 @@ export const CustomerWallet: React.FC = () => {
                   ) : (
                     <>
                       <CreditCard className="w-4 h-4" />
-                      <span>Pay ₹{addAmount} with Razorpay</span>
+                      <span>Pay ₹{addAmount} via Razorpay</span>
                     </>
                   )}
                 </button>

@@ -1,6 +1,11 @@
 import { doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { Booking } from '../types';
+import { safeFetchJson } from '../utils/safeJson';
+import {
+  notifyOtpReady,
+  notifyWorkStarted,
+} from './bookingNotificationIntegrationService';
 
 export const ARRIVAL_OTP_SALT = 'HARDINKAAM_ARRIVAL_OTP_SALT_2026';
 
@@ -99,21 +104,20 @@ export async function getOrCreateArrivalOtp(
       body: JSON.stringify({ bookingId, customerId }),
     });
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.arrivalOtp) {
-        if (typeof window !== 'undefined') {
-          sessionStorage.setItem(
-            cachedKey,
-            JSON.stringify({ code: data.arrivalOtp, expiresAt: data.expiresAt })
-          );
-        }
-        return {
-          success: true,
-          arrivalOtp: data.arrivalOtp,
-          expiresAt: data.expiresAt,
-        };
+    const jsonResult = await safeFetchJson(res);
+    const data = jsonResult.data;
+    if (res.ok && jsonResult.ok && data?.success && data?.arrivalOtp) {
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem(
+          cachedKey,
+          JSON.stringify({ code: data.arrivalOtp, expiresAt: data.expiresAt })
+        );
       }
+      return {
+        success: true,
+        arrivalOtp: data.arrivalOtp,
+        expiresAt: data.expiresAt,
+      };
     }
   } catch (err) {
     console.warn('Server generate-arrival-otp failed, fallback to secure client hash:', err);
@@ -141,6 +145,14 @@ export async function getOrCreateArrivalOtp(
         JSON.stringify({ code: newCode, expiresAt })
       );
     }
+
+    // Dispatch deduplicated OTP Ready notification to customer
+    try {
+      const snap = await getDoc(bookingRef);
+      if (snap.exists()) {
+        notifyOtpReady(snap.data() as Booking, newCode).catch(() => {});
+      }
+    } catch (_) {}
 
     return {
       success: true,
@@ -189,8 +201,17 @@ export async function verifyArrivalOtpServer(
       }),
     });
 
-    const data = await res.json();
-    if (res.ok && data.success) {
+    const jsonResult = await safeFetchJson(res);
+    const data = jsonResult.data;
+    if (res.ok && jsonResult.ok && data?.success) {
+      // Dispatch deduplicated notification
+      try {
+        const snap = await getDoc(doc(db, 'bookings', bookingId));
+        if (snap.exists()) {
+          notifyWorkStarted(snap.data() as Booking).catch(() => {});
+        }
+      } catch (_) {}
+
       return {
         success: true,
         message: 'OTP Verified ✓',
@@ -274,6 +295,9 @@ export async function verifyArrivalOtpServer(
       } catch (trackErr) {
         console.warn('Could not update serviceTracking to WORK_STARTED:', trackErr);
       }
+
+      // Dispatch deduplicated notification
+      notifyWorkStarted(booking).catch(() => {});
 
       return {
         success: true,

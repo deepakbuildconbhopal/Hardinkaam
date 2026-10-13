@@ -10,6 +10,8 @@ import {
   where,
   getDoc,
   setDoc,
+  getCountFromServer,
+  limit,
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 
@@ -161,114 +163,100 @@ export async function fetchDatabaseCollectionStats(): Promise<DatabaseCollection
 
   try {
     const fetchPromises = [
-      getDocs(collection(db, 'bookings'))
+      getCountFromServer(collection(db, 'bookings'))
         .then((snap) => {
-          counts.bookingsTotal = snap.size;
-          snap.docs.forEach((d) => {
-            const data = d.data();
-            const status = (data.status || '').toLowerCase();
-            if (['completed', 'cancelled', 'canceled', 'rejected'].includes(status)) {
-              counts.bookingsCompletedOrCancelled++;
-            } else {
-              counts.bookingsActive++;
-            }
-          });
+          counts.bookingsTotal = snap.data().count;
+          counts.bookingsActive = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'transactions'))
+      getCountFromServer(collection(db, 'transactions'))
         .then((snap) => {
-          counts.transactionsTotal = snap.size;
+          counts.transactionsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'wallet_transactions'))
+      getCountFromServer(collection(db, 'wallet_transactions'))
         .then((snap) => {
-          counts.walletTransactionsTotal = snap.size;
+          counts.walletTransactionsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'payments'))
+      getCountFromServer(collection(db, 'payments'))
         .then((snap) => {
-          counts.paymentsTotal = snap.size;
+          counts.paymentsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'serviceman_payouts'))
+      getCountFromServer(collection(db, 'serviceman_payouts'))
         .then((snap) => {
-          counts.servicemanPayoutsTotal = snap.size;
+          counts.servicemanPayoutsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'wallets'))
+      getCountFromServer(collection(db, 'wallets'))
         .then((snap) => {
-          counts.walletsTotal = snap.size;
-          snap.docs.forEach((d) => {
-            const data = d.data();
-            if ((data.balance || 0) > 0 || (data.pendingBalance || 0) > 0) {
-              counts.walletsNonZero++;
-            }
-          });
+          counts.walletsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'messages'))
+      getCountFromServer(collection(db, 'messages'))
         .then((snap) => {
-          counts.messagesTotal = snap.size;
+          counts.messagesTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'whatsapp_logs'))
+      getCountFromServer(collection(db, 'whatsapp_logs'))
         .then((snap) => {
-          counts.whatsappLogsTotal = snap.size;
+          counts.whatsappLogsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'notifications'))
+      getCountFromServer(collection(db, 'notifications'))
         .then((snap) => {
-          counts.notificationsTotal = snap.size;
+          counts.notificationsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'reviews'))
+      getCountFromServer(collection(db, 'reviews'))
         .then((snap) => {
-          counts.reviewsTotal = snap.size;
+          counts.reviewsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'kyc_documents'))
+      getCountFromServer(collection(db, 'kyc_documents'))
         .then((snap) => {
-          counts.kycDocsTotal = snap.size;
+          counts.kycDocsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'franchise_applications'))
+      getCountFromServer(collection(db, 'franchise_applications'))
         .then((snap) => {
-          counts.franchiseAppsTotal = snap.size;
+          counts.franchiseAppsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'bulk_campaigns'))
+      getCountFromServer(collection(db, 'bulk_campaigns'))
         .then((snap) => {
-          counts.bulkCampaignsTotal = snap.size;
+          counts.bulkCampaignsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'password_reset_requests'))
+      getCountFromServer(collection(db, 'password_reset_requests'))
         .then((snap) => {
-          counts.passwordResetsTotal = snap.size;
+          counts.passwordResetsTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'service_men'))
+      getCountFromServer(collection(db, 'service_men'))
         .then((snap) => {
-          counts.serviceMenTotal = snap.size;
+          counts.serviceMenTotal = snap.data().count;
         })
         .catch(() => {}),
 
-      getDocs(collection(db, 'audit_logs'))
+      getCountFromServer(collection(db, 'audit_logs'))
         .then((snap) => {
-          counts.auditLogsTotal = snap.size;
+          counts.auditLogsTotal = snap.data().count;
         })
         .catch(() => {}),
     ];
@@ -282,7 +270,7 @@ export async function fetchDatabaseCollectionStats(): Promise<DatabaseCollection
 }
 
 /**
- * Execute fast batched deletion for an array of document IDs in a collection
+ * Execute fast batched deletion for an array of document IDs in a collection with safe fallback
  */
 async function batchDeleteCollectionDocs(
   collectionName: string,
@@ -290,18 +278,31 @@ async function batchDeleteCollectionDocs(
   onChunk?: (processed: number) => void
 ): Promise<number> {
   if (docsToDelete.length === 0) return 0;
-  const chunkSize = 400;
+  const chunkSize = 200;
   let deletedCount = 0;
 
   for (let i = 0; i < docsToDelete.length; i += chunkSize) {
     const chunk = docsToDelete.slice(i, i + chunkSize);
-    const batch = writeBatch(db);
-    for (const item of chunk) {
-      batch.delete(doc(db, collectionName, item.id));
+    try {
+      const batch = writeBatch(db);
+      for (const item of chunk) {
+        batch.delete(doc(db, collectionName, item.id));
+      }
+      await batch.commit();
+      deletedCount += chunk.length;
+      onChunk?.(deletedCount);
+    } catch (batchErr) {
+      console.warn(`Batch delete error on ${collectionName}, falling back to single deletions:`, batchErr);
+      for (const item of chunk) {
+        try {
+          await deleteDoc(doc(db, collectionName, item.id));
+          deletedCount++;
+        } catch (singleErr) {
+          console.warn(`Could not delete doc ${item.id} in ${collectionName}:`, singleErr);
+        }
+      }
+      onChunk?.(deletedCount);
     }
-    await batch.commit();
-    deletedCount += chunk.length;
-    onChunk?.(deletedCount);
   }
 
   return deletedCount;
@@ -346,13 +347,29 @@ export async function executeAdvancedDataOperations(
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   const thirtyDaysIso = thirtyDaysAgo.toISOString();
 
-  try {
-    // ----------------------------------------------------
-    // SECTION 1: WHAT TO DELETE (क्या मिटाना है)
-    // ----------------------------------------------------
+  // Ensure Admin profile document is synchronized if uid is present
+  if (adminUid) {
+    try {
+      await setDoc(
+        doc(db, 'users', adminUid),
+        {
+          role: 'admin',
+          isAdmin: true,
+          email: adminEmail || 'deepakbuildconbhopal@gmail.com',
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (_) {}
+  }
 
-    // 1. Delete Bookings
-    if (deleteOptions.bookings) {
+  // ----------------------------------------------------
+  // SECTION 1: WHAT TO DELETE (क्या मिटाना है)
+  // ----------------------------------------------------
+
+  // 1. Delete Bookings
+  if (deleteOptions.bookings) {
+    try {
       onProgress?.('बुकिंग्स डेटा स्कैन व फ़िल्टर हो रहा है...', 10);
       const bookingsSnap = await getDocs(collection(db, 'bookings'));
       const toDelete: { id: string }[] = [];
@@ -377,13 +394,17 @@ export async function executeAdvancedDataOperations(
 
       onProgress?.(`${toDelete.length} बुकिंग्स डिलीट की जा रही हैं...`, 15);
       stats.bookingsDeleted = await batchDeleteCollectionDocs('bookings', toDelete);
+    } catch (err) {
+      console.warn('Error deleting bookings:', err);
     }
+  }
 
-    // 2. Delete Transactions & Financial Ledger
-    if (deleteOptions.transactions) {
-      onProgress?.('वित्तीय लेनदेन व लेजर हिस्ट्री हटाई जा रही है...', 22);
+  // 2. Delete Transactions & Financial Ledger
+  if (deleteOptions.transactions) {
+    onProgress?.('वित्तीय लेनदेन व लेजर हिस्ट्री हटाई जा रही है...', 22);
 
-      // transactions
+    // transactions
+    try {
       const transSnap = await getDocs(collection(db, 'transactions'));
       const transToDelete: { id: string }[] = [];
       for (const tDoc of transSnap.docs) {
@@ -394,8 +415,12 @@ export async function executeAdvancedDataOperations(
         }
       }
       stats.transactionsDeleted = await batchDeleteCollectionDocs('transactions', transToDelete);
+    } catch (err) {
+      console.warn('Error deleting transactions:', err);
+    }
 
-      // wallet_transactions
+    // wallet_transactions
+    try {
       const wtSnap = await getDocs(collection(db, 'wallet_transactions'));
       const wtToDelete: { id: string }[] = [];
       for (const wtDoc of wtSnap.docs) {
@@ -406,139 +431,187 @@ export async function executeAdvancedDataOperations(
         }
       }
       stats.walletTransactionsDeleted = await batchDeleteCollectionDocs('wallet_transactions', wtToDelete);
+    } catch (err) {
+      console.warn('Error deleting wallet transactions:', err);
+    }
 
-      // payments
+    // payments
+    try {
       const paySnap = await getDocs(collection(db, 'payments'));
       stats.paymentsDeleted = await batchDeleteCollectionDocs(
         'payments',
         paySnap.docs.map((d) => ({ id: d.id }))
       );
+    } catch (err) {
+      console.warn('Error deleting payments:', err);
+    }
 
-      // serviceman_payouts
+    // serviceman_payouts
+    try {
       const payoutSnap = await getDocs(collection(db, 'serviceman_payouts'));
       stats.payoutsDeleted = await batchDeleteCollectionDocs(
         'serviceman_payouts',
         payoutSnap.docs.map((d) => ({ id: d.id }))
       );
+    } catch (err) {
+      console.warn('Error deleting payouts:', err);
     }
+  }
 
-    // 3. Delete Messages / Chat Logs
-    if (deleteOptions.messages) {
+  // 3. Delete Messages / Chat Logs
+  if (deleteOptions.messages) {
+    try {
       onProgress?.('चैट संदेश व मीडिया रिकॉर्ड्स हटाए जा रहे हैं...', 35);
       const msgSnap = await getDocs(collection(db, 'messages'));
       stats.messagesDeleted = await batchDeleteCollectionDocs(
         'messages',
         msgSnap.docs.map((d) => ({ id: d.id }))
       );
+    } catch (err) {
+      console.warn('Error deleting messages:', err);
     }
+  }
 
-    // 4. Delete WhatsApp Logs
-    if (deleteOptions.whatsappLogs) {
+  // 4. Delete WhatsApp Logs
+  if (deleteOptions.whatsappLogs) {
+    try {
       onProgress?.('व्हाट्सएप डिस्पैच लॉग्स हटाए जा रहे हैं...', 42);
       const waSnap = await getDocs(collection(db, 'whatsapp_logs'));
       stats.whatsappLogsDeleted = await batchDeleteCollectionDocs(
         'whatsapp_logs',
         waSnap.docs.map((d) => ({ id: d.id }))
       );
+    } catch (err) {
+      console.warn('Error deleting whatsapp logs:', err);
     }
+  }
 
-    // 5. Delete Notifications
-    if (deleteOptions.notifications) {
+  // 5. Delete Notifications
+  if (deleteOptions.notifications) {
+    try {
       onProgress?.('उपयोगकर्ता नोटिफिकेशन अलर्ट्स हटाए जा रहे हैं...', 48);
       const notifSnap = await getDocs(collection(db, 'notifications'));
       stats.notificationsDeleted = await batchDeleteCollectionDocs(
         'notifications',
         notifSnap.docs.map((d) => ({ id: d.id }))
       );
+    } catch (err) {
+      console.warn('Error deleting notifications:', err);
     }
+  }
 
-    // 6. Delete Reviews
-    if (deleteOptions.reviews) {
+  // 6. Delete Reviews
+  if (deleteOptions.reviews) {
+    try {
       onProgress?.('कस्टमर समीक्षाएं व रेटिंग्स हटाई जा रही हैं...', 54);
       const revSnap = await getDocs(collection(db, 'reviews'));
       stats.reviewsDeleted = await batchDeleteCollectionDocs(
         'reviews',
         revSnap.docs.map((d) => ({ id: d.id }))
       );
+    } catch (err) {
+      console.warn('Error deleting reviews:', err);
     }
+  }
 
-    // 7. Delete KYC Documents
-    if (deleteOptions.kycDocuments) {
+  // 7. Delete KYC Documents
+  if (deleteOptions.kycDocuments) {
+    try {
       onProgress?.('तकनीशियन केवाईसी दस्तावेज हटाए जा रहे हैं...', 60);
       const kycSnap = await getDocs(collection(db, 'kyc_documents'));
       stats.kycDocsDeleted = await batchDeleteCollectionDocs(
         'kyc_documents',
         kycSnap.docs.map((d) => ({ id: d.id }))
       );
+    } catch (err) {
+      console.warn('Error deleting kyc documents:', err);
     }
+  }
 
-    // 8. Delete Franchise Applications
-    if (deleteOptions.franchiseApplications) {
+  // 8. Delete Franchise Applications
+  if (deleteOptions.franchiseApplications) {
+    try {
       onProgress?.('फ्रेंचाइजी व पार्टनर लीड्स हटाई जा रही हैं...', 65);
       const franSnap = await getDocs(collection(db, 'franchise_applications'));
       stats.franchiseAppsDeleted = await batchDeleteCollectionDocs(
         'franchise_applications',
         franSnap.docs.map((d) => ({ id: d.id }))
       );
+    } catch (err) {
+      console.warn('Error deleting franchise applications:', err);
     }
+  }
 
-    // 9. Delete Bulk SMS Campaigns
-    if (deleteOptions.bulkCampaigns) {
+  // 9. Delete Bulk SMS Campaigns
+  if (deleteOptions.bulkCampaigns) {
+    try {
       onProgress?.('बल्क एसएमएस कैम्पेन हिस्ट्री हटाई जा रही है...', 70);
       const bulkSnap = await getDocs(collection(db, 'bulk_campaigns'));
       stats.bulkCampaignsDeleted = await batchDeleteCollectionDocs(
         'bulk_campaigns',
         bulkSnap.docs.map((d) => ({ id: d.id }))
       );
+    } catch (err) {
+      console.warn('Error deleting bulk campaigns:', err);
     }
+  }
 
-    // 10. Delete Password Reset Requests
-    if (deleteOptions.passwordResetRequests) {
+  // 10. Delete Password Reset Requests
+  if (deleteOptions.passwordResetRequests) {
+    try {
       onProgress?.('पासवर्ड रीसेट टिकट्स हटाए जा रहे हैं...', 74);
       const rstSnap = await getDocs(collection(db, 'password_reset_requests'));
       stats.passwordResetsDeleted = await batchDeleteCollectionDocs(
         'password_reset_requests',
         rstSnap.docs.map((d) => ({ id: d.id }))
       );
+    } catch (err) {
+      console.warn('Error deleting password reset requests:', err);
     }
+  }
 
-    // 11. Delete Historic Audit Logs
-    if (deleteOptions.auditLogs) {
+  // 11. Delete Historic Audit Logs
+  if (deleteOptions.auditLogs) {
+    try {
       onProgress?.('पुराने सुरक्षा ऑडिट लॉग्स साफ़ किए जा रहे हैं...', 78);
       const auditSnap = await getDocs(collection(db, 'audit_logs'));
       stats.auditLogsDeleted = await batchDeleteCollectionDocs(
         'audit_logs',
         auditSnap.docs.map((d) => ({ id: d.id }))
       );
+    } catch (err) {
+      console.warn('Error deleting audit logs:', err);
     }
+  }
 
-    stats.totalDeleted =
-      stats.bookingsDeleted +
-      stats.transactionsDeleted +
-      stats.walletTransactionsDeleted +
-      stats.paymentsDeleted +
-      stats.payoutsDeleted +
-      stats.messagesDeleted +
-      stats.whatsappLogsDeleted +
-      stats.notificationsDeleted +
-      stats.reviewsDeleted +
-      stats.kycDocsDeleted +
-      stats.franchiseAppsDeleted +
-      stats.bulkCampaignsDeleted +
-      stats.passwordResetsDeleted +
-      stats.auditLogsDeleted;
+  stats.totalDeleted =
+    stats.bookingsDeleted +
+    stats.transactionsDeleted +
+    stats.walletTransactionsDeleted +
+    stats.paymentsDeleted +
+    stats.payoutsDeleted +
+    stats.messagesDeleted +
+    stats.whatsappLogsDeleted +
+    stats.notificationsDeleted +
+    stats.reviewsDeleted +
+    stats.kycDocsDeleted +
+    stats.franchiseAppsDeleted +
+    stats.bulkCampaignsDeleted +
+    stats.passwordResetsDeleted +
+    stats.auditLogsDeleted;
 
-    // ----------------------------------------------------
-    // SECTION 2: WHAT TO UPDATE / RESET (क्या अपडेट / रीसेट करना है)
-    // ----------------------------------------------------
+  // ----------------------------------------------------
+  // SECTION 2: WHAT TO UPDATE / RESET (क्या अपडेट / रीसेट करना है)
+  // ----------------------------------------------------
 
-    // 1. Reset Wallets
-    if (updateOptions.resetWallets) {
+  // 1. Reset Wallets
+  if (updateOptions.resetWallets) {
+    try {
       onProgress?.('वॉलेट बैलेंस रीसेट किए जा रहे हैं...', 83);
       const walletsSnap = await getDocs(collection(db, 'wallets'));
       const targetBal = Number(updateOptions.walletTargetBalance) || 0;
 
-      const chunkSize = 350;
+      const chunkSize = 200;
       for (let i = 0; i < walletsSnap.docs.length; i += chunkSize) {
         const chunk = walletsSnap.docs.slice(i, i + chunkSize);
         const batch = writeBatch(db);
@@ -563,59 +636,63 @@ export async function executeAdvancedDataOperations(
         await batch.commit();
         stats.walletsReset += chunk.length;
       }
+    } catch (err) {
+      console.warn('Error resetting wallets:', err);
     }
+  }
 
-    // 2. Reset Technicians / Service Men Status & Stats
-    if (updateOptions.resetTechnicians) {
-      onProgress?.('तकनीशियनों की ड्यूटी व आंकड़े रीसेट हो रहे हैं...', 88);
+  // 2. Reset Technicians / Service Men Status & Stats
+  if (updateOptions.resetTechnicians) {
+    onProgress?.('तकनीशियनों की ड्यूटी व आंकड़े रीसेट हो रहे हैं...', 88);
 
-      const updateProsCollection = async (collName: string) => {
-        try {
-          const prosSnap = await getDocs(collection(db, collName));
-          const chunkSize = 350;
+    const updateProsCollection = async (collName: string) => {
+      try {
+        const prosSnap = await getDocs(collection(db, collName));
+        const chunkSize = 200;
 
-          for (let i = 0; i < prosSnap.docs.length; i += chunkSize) {
-            const chunk = prosSnap.docs.slice(i, i + chunkSize);
-            const batch = writeBatch(db);
+        for (let i = 0; i < prosSnap.docs.length; i += chunkSize) {
+          const chunk = prosSnap.docs.slice(i, i + chunkSize);
+          const batch = writeBatch(db);
 
-            for (const pDoc of chunk) {
-              const updatePayload: Record<string, any> = {
-                updatedAt: new Date().toISOString(),
-              };
+          for (const pDoc of chunk) {
+            const updatePayload: Record<string, any> = {
+              updatedAt: new Date().toISOString(),
+            };
 
-              if (updateOptions.techniciansSetOffline) {
-                updatePayload.isOnline = false;
-                updatePayload.status = 'offline';
-                updatePayload.activeBookingId = null;
-              }
-              if (updateOptions.techniciansResetJobsCounter) {
-                updatePayload.jobsCompleted = 0;
-              }
-              if (updateOptions.techniciansResetRatingToDefault) {
-                updatePayload.rating = 5.0;
-                updatePayload.reviewCount = 0;
-              }
-
-              batch.update(doc(db, collName, pDoc.id), updatePayload);
+            if (updateOptions.techniciansSetOffline) {
+              updatePayload.isOnline = false;
+              updatePayload.status = 'offline';
+              updatePayload.activeBookingId = null;
+            }
+            if (updateOptions.techniciansResetJobsCounter) {
+              updatePayload.jobsCompleted = 0;
+            }
+            if (updateOptions.techniciansResetRatingToDefault) {
+              updatePayload.rating = 5.0;
+              updatePayload.reviewCount = 0;
             }
 
-            await batch.commit();
-            stats.techniciansUpdated += chunk.length;
+            batch.update(doc(db, collName, pDoc.id), updatePayload);
           }
-        } catch (e) {
-          console.warn(`Error updating ${collName}:`, e);
+
+          await batch.commit();
+          stats.techniciansUpdated += chunk.length;
         }
-      };
+      } catch (e) {
+        console.warn(`Error updating ${collName}:`, e);
+      }
+    };
 
-      await updateProsCollection('service_men');
-      await updateProsCollection('serviceMen');
-    }
+    await updateProsCollection('service_men');
+    await updateProsCollection('serviceMen');
+  }
 
-    // 3. Update Bookings Status (Update without deleting)
-    if (updateOptions.updateBookingsStatus && !deleteOptions.bookings) {
+  // 3. Update Bookings Status (Update without deleting)
+  if (updateOptions.updateBookingsStatus && !deleteOptions.bookings) {
+    try {
       onProgress?.('बुकिंग स्थिति अपडेट की जा रही है...', 92);
       const bookingsSnap = await getDocs(collection(db, 'bookings'));
-      const chunkSize = 350;
+      const chunkSize = 200;
       const targetAction = updateOptions.bookingsTargetStatus;
 
       for (let i = 0; i < bookingsSnap.docs.length; i += chunkSize) {
@@ -656,69 +733,68 @@ export async function executeAdvancedDataOperations(
           stats.bookingsUpdated += countInChunk;
         }
       }
+    } catch (err) {
+      console.warn('Error updating bookings status:', err);
     }
-
-    // 4. Reset Platform Settings
-    if (updateOptions.resetPlatformSettings) {
-      onProgress?.('डिफ़ॉल्ट प्लेटफ़ॉर्म सेटिंग्स लागू हो रही हैं...', 95);
-      try {
-        await setDoc(
-          doc(db, 'settings', 'platform'),
-          {
-            commissionRate: 10,
-            minimumWithdrawal: 200,
-            gstPercentage: 18,
-            safetyInspectionFee: 49,
-            freeCancellationWindowHours: 2,
-            supportContact: '918889997576',
-            emergencyHotline: '1800-889-9975',
-            businessName: 'HARDINKAAM by Deepak Buildcon',
-            operationalCity: 'Bhopal',
-            autoAssignRadiusKm: 8,
-            updatedAt: new Date().toISOString(),
-            updatedBy: adminEmail,
-          },
-          { merge: true }
-        );
-        stats.settingsReset = true;
-      } catch (sErr) {
-        console.warn('Could not reset platform settings:', sErr);
-      }
-    }
-
-    stats.totalUpdated =
-      stats.walletsReset +
-      stats.techniciansUpdated +
-      stats.bookingsUpdated +
-      (stats.settingsReset ? 1 : 0);
-
-    // ----------------------------------------------------
-    // SECTION 3: WRITE AUDIT LOG (सुरक्षा ऑडिट रिकॉर्ड)
-    // ----------------------------------------------------
-    onProgress?.('ऑपरेशनल ऑडिट लॉग सुरक्षित किया जा रहा है...', 98);
-    try {
-      await addDoc(collection(db, 'audit_logs'), {
-        userId: adminUid,
-        userEmail: adminEmail,
-        action: 'ADVANCED_DATABASE_ZERO_AND_RESET',
-        details: {
-          deletedSummary: `Deleted ${stats.totalDeleted} records (${stats.bookingsDeleted} bookings, ${stats.transactionsDeleted + stats.walletTransactionsDeleted} transactions, ${stats.messagesDeleted} chats, ${stats.whatsappLogsDeleted} WhatsApp logs, ${stats.reviewsDeleted} reviews).`,
-          updatedSummary: `Updated ${stats.totalUpdated} records (${stats.walletsReset} wallets, ${stats.techniciansUpdated} technicians, ${stats.bookingsUpdated} bookings status).`,
-          settingsReset: stats.settingsReset,
-        },
-        stats,
-        timestamp: new Date().toISOString(),
-      });
-    } catch (auditErr) {
-      console.warn('Audit log write error:', auditErr);
-    }
-
-    onProgress?.('सभी चुने गए ऑपरेशन्स सफलतापूर्वक पूरे हुए!', 100);
-    return stats;
-  } catch (error) {
-    console.error('Error in executeAdvancedDataOperations:', error);
-    throw error;
   }
+
+  // 4. Reset Platform Settings
+  if (updateOptions.resetPlatformSettings) {
+    onProgress?.('डिफ़ॉल्ट प्लेटफ़ॉर्म सेटिंग्स लागू हो रही हैं...', 95);
+    try {
+      await setDoc(
+        doc(db, 'settings', 'platform'),
+        {
+          commissionRate: 10,
+          minimumWithdrawal: 200,
+          gstPercentage: 18,
+          safetyInspectionFee: 49,
+          freeCancellationWindowHours: 2,
+          supportContact: '6267546945',
+          emergencyHotline: '6267546945',
+          businessName: 'HARDINKAAM by Deepak Buildcon',
+          operationalCity: 'Bhopal',
+          autoAssignRadiusKm: 8,
+          updatedAt: new Date().toISOString(),
+          updatedBy: adminEmail,
+        },
+        { merge: true }
+      );
+      stats.settingsReset = true;
+    } catch (sErr) {
+      console.warn('Could not reset platform settings:', sErr);
+    }
+  }
+
+  stats.totalUpdated =
+    stats.walletsReset +
+    stats.techniciansUpdated +
+    stats.bookingsUpdated +
+    (stats.settingsReset ? 1 : 0);
+
+  // ----------------------------------------------------
+  // SECTION 3: WRITE AUDIT LOG (सुरक्षा ऑडिट रिकॉर्ड)
+  // ----------------------------------------------------
+  onProgress?.('ऑपरेशनल ऑडिट लॉग सुरक्षित किया जा रहा है...', 98);
+  try {
+    await addDoc(collection(db, 'audit_logs'), {
+      userId: adminUid || 'admin',
+      userEmail: adminEmail || 'deepakbuildconbhopal@gmail.com',
+      action: 'ADVANCED_DATABASE_ZERO_AND_RESET',
+      details: {
+        deletedSummary: `Deleted ${stats.totalDeleted} records (${stats.bookingsDeleted} bookings, ${stats.transactionsDeleted + stats.walletTransactionsDeleted} transactions, ${stats.messagesDeleted} chats, ${stats.whatsappLogsDeleted} WhatsApp logs, ${stats.reviewsDeleted} reviews).`,
+        updatedSummary: `Updated ${stats.totalUpdated} records (${stats.walletsReset} wallets, ${stats.techniciansUpdated} technicians, ${stats.bookingsUpdated} bookings status).`,
+        settingsReset: stats.settingsReset,
+      },
+      stats,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (auditErr) {
+    console.warn('Audit log write note:', auditErr);
+  }
+
+  onProgress?.('सभी चुने गए ऑपरेशन्स सफलतापूर्वक पूरे हुए!', 100);
+  return stats;
 }
 
 /**

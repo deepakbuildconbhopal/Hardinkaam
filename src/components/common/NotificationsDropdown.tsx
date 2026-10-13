@@ -1,6 +1,21 @@
-import React from 'react';
-import { Bell, CheckCheck, X, ExternalLink, Calendar, CreditCard, ShieldCheck, AlertCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  Bell,
+  CheckCheck,
+  X,
+  ExternalLink,
+  Calendar,
+  CreditCard,
+  ShieldCheck,
+  AlertCircle,
+  BellRing,
+  Loader2,
+  Check,
+  Unlock,
+  AlertTriangle,
+} from 'lucide-react';
 import { useNotifications } from '../../context/NotificationContext';
+import { BrowserNotificationUnblockModal } from './BrowserNotificationUnblockModal';
 
 interface Props {
   isOpen: boolean;
@@ -9,9 +24,47 @@ interface Props {
 }
 
 export const NotificationsDropdown: React.FC<Props> = ({ isOpen, onClose, onSelectBooking }) => {
-  const { notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications();
+  const {
+    notifications,
+    unreadCount,
+    markAsRead,
+    markAllAsRead,
+    isPushSupported,
+    pushPermission,
+    isPushSubscribed,
+    enablePushNotifications,
+    disablePushNotifications,
+  } = useNotifications();
+
+  const [loadingPush, setLoadingPush] = useState(false);
+  const [pushMessage, setPushMessage] = useState<string | null>(null);
+  const [isUnblockModalOpen, setIsUnblockModalOpen] = useState(false);
 
   if (!isOpen) return null;
+
+  const handleTogglePush = async () => {
+    setLoadingPush(true);
+    setPushMessage(null);
+    try {
+      if (isPushSubscribed) {
+        await disablePushNotifications();
+        setPushMessage('Push notifications turned off for this device.');
+      } else {
+        const result = await enablePushNotifications();
+        if (result.success) {
+          setPushMessage('Push notifications enabled successfully!');
+        } else {
+          setPushMessage(result.error || 'Could not enable push notifications.');
+        }
+      }
+      setTimeout(() => setPushMessage(null), 4000);
+    } catch (err: any) {
+      setPushMessage(err?.message || 'Error updating push notification preferences.');
+      setTimeout(() => setPushMessage(null), 4000);
+    } finally {
+      setLoadingPush(false);
+    }
+  };
 
   const getIcon = (type: string) => {
     switch (type) {
@@ -31,6 +84,7 @@ export const NotificationsDropdown: React.FC<Props> = ({ isOpen, onClose, onSele
       id="notifications-panel"
       className="absolute right-0 top-12 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-stone-200 z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150"
     >
+      {/* Header */}
       <div className="p-4 bg-stone-50 border-b border-stone-200 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Bell className="w-5 h-5 text-orange-600" />
@@ -45,6 +99,7 @@ export const NotificationsDropdown: React.FC<Props> = ({ isOpen, onClose, onSele
           {unreadCount > 0 && (
             <button
               id="mark-all-read-btn"
+              type="button"
               onClick={markAllAsRead}
               className="text-xs text-orange-600 hover:text-orange-700 font-medium flex items-center gap-1 cursor-pointer"
             >
@@ -53,14 +108,89 @@ export const NotificationsDropdown: React.FC<Props> = ({ isOpen, onClose, onSele
             </button>
           )}
           <button
+            type="button"
             onClick={onClose}
-            className="p-1 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-200/60"
+            className="p-1 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-200/60 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
       </div>
 
+      {/* FCM Push Notification User-Action Control */}
+      {isPushSupported && (
+        <div className="p-3 bg-stone-100/70 border-b border-stone-200/80">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <div
+                className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                  isPushSubscribed
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-orange-100 text-orange-600'
+                }`}
+              >
+                <BellRing className="w-3.5 h-3.5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-stone-800 truncate">
+                  {isPushSubscribed ? 'Push Notifications Active' : 'Device Push Alerts'}
+                </p>
+                <p className="text-[10px] text-stone-500 truncate">
+                  {isPushSubscribed
+                    ? 'Background push active for this browser'
+                    : pushPermission === 'denied'
+                    ? '⚠️ ब्राउज़र में ब्लॉक है (Blocked in browser)'
+                    : 'Get real-time alerts on your device'}
+                </p>
+              </div>
+            </div>
+
+            {pushPermission === 'denied' ? (
+              <button
+                id="fcm-push-unblock-btn"
+                type="button"
+                onClick={() => setIsUnblockModalOpen(true)}
+                className="px-2.5 py-1 text-xs font-black rounded-lg transition-all cursor-pointer flex items-center gap-1 flex-shrink-0 bg-red-600 hover:bg-red-500 text-white shadow-xs animate-pulse ring-2 ring-red-400/50"
+                title="ब्राउज़र अनुमति अनलॉक करने के चरण देखें"
+              >
+                <Unlock className="w-3 h-3 text-amber-200" />
+                <span>अनलॉक करें (Unblock)</span>
+              </button>
+            ) : (
+              <button
+                id="fcm-push-toggle-btn"
+                type="button"
+                disabled={loadingPush}
+                onClick={handleTogglePush}
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1 flex-shrink-0 ${
+                  isPushSubscribed
+                    ? 'bg-stone-200 hover:bg-stone-300 text-stone-700'
+                    : 'bg-orange-600 hover:bg-orange-700 text-white shadow-xs'
+                }`}
+              >
+                {loadingPush ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : isPushSubscribed ? (
+                  'Turn Off'
+                ) : (
+                  <>
+                    <Check className="w-3 h-3" />
+                    Enable
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+
+          {pushMessage && (
+            <p className="text-[10px] text-orange-700 font-medium mt-1.5 bg-orange-50 p-1.5 rounded-md">
+              {pushMessage}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Notifications List */}
       <div className="max-h-96 overflow-y-auto divide-y divide-stone-100">
         {notifications.length === 0 ? (
           <div className="p-8 text-center">
@@ -87,7 +217,11 @@ export const NotificationsDropdown: React.FC<Props> = ({ isOpen, onClose, onSele
                 <div className="p-2 rounded-xl bg-stone-100 mt-0.5 flex-shrink-0">{getIcon(n.type)}</div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1">
-                    <h4 className={`text-xs font-medium truncate ${!n.read ? 'text-stone-950 font-bold' : 'text-stone-800'}`}>
+                    <h4
+                      className={`text-xs font-medium truncate ${
+                        !n.read ? 'text-stone-950 font-bold' : 'text-stone-800'
+                      }`}
+                    >
                       {n.title}
                     </h4>
                     {!n.read && <span className="w-2 h-2 rounded-full bg-orange-600 flex-shrink-0" />}
@@ -95,7 +229,9 @@ export const NotificationsDropdown: React.FC<Props> = ({ isOpen, onClose, onSele
                   <p className="text-xs text-stone-500 mt-0.5 line-clamp-2 leading-relaxed">{n.message}</p>
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-[10px] text-stone-400">
-                      {n.createdAt ? new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
+                      {n.createdAt
+                        ? new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : 'Just now'}
                     </span>
                     {n.link && (
                       <span className="text-[10px] text-orange-600 font-medium flex items-center gap-0.5">
@@ -109,6 +245,17 @@ export const NotificationsDropdown: React.FC<Props> = ({ isOpen, onClose, onSele
           ))
         )}
       </div>
+
+      {/* Browser Notification Unblock Modal */}
+      <BrowserNotificationUnblockModal
+        isOpen={isUnblockModalOpen}
+        onClose={() => setIsUnblockModalOpen(false)}
+        onSuccess={() => {
+          setIsUnblockModalOpen(false);
+          setPushMessage('🎉 डिवाइस पुश अलर्ट सफलतापूर्वक अनलॉक व सक्रिय हो गए हैं!');
+          setTimeout(() => setPushMessage(null), 5000);
+        }}
+      />
     </div>
   );
 };

@@ -1,6 +1,6 @@
 {
   "packageId": "com.hardinkaam.app",
-  "host": "hardinkaam.com",
+  "host": "www.hardinkaam.online",
   "name": "HARDINKAAM",
   "launcherName": "HARDINKAAM",
   "display": "standalone",
@@ -11,8 +11,8 @@
   "backgroundColor": "#ffffff",
   "enableNotifications": true,
   "startUrl": "/",
-  "iconUrl": "https://hardinkaam.com/pwa-512x512.png",
-  "maskableIconUrl": "https://hardinkaam.com/pwa-maskable-512x512.png",
+  "iconUrl": "https://www.hardinkaam.online/pwa-512x512.png",
+  "maskableIconUrl": "https://www.hardinkaam.online/pwa-maskable-512x512.png",
   "appVersionName": "1.0.0",
   "appVersionCode": 1,
   "shortcuts": [
@@ -20,22 +20,22 @@
       "name": "Book Electrician",
       "short_name": "Electrician",
       "url": "/#electrician",
-      "icon": "https://hardinkaam.com/pwa-192x192.png"
+      "icon": "https://www.hardinkaam.online/pwa-192x192.png"
     },
     {
       "name": "Book Plumber",
       "short_name": "Plumber",
       "url": "/#plumber",
-      "icon": "https://hardinkaam.com/pwa-192x192.png"
+      "icon": "https://www.hardinkaam.online/pwa-192x192.png"
     },
     {
       "name": "Franchise Portal",
       "short_name": "Franchise",
       "url": "/#franchise",
-      "icon": "https://hardinkaam.com/pwa-192x192.png"
+      "icon": "https://www.hardinkaam.online/pwa-192x192.png"
     }
   ],
-  "webManifestUrl": "https://hardinkaam.com/manifest.webmanifest",
+  "webManifestUrl": "https://www.hardinkaam.online/manifest.webmanifest",
   "features": {
     "playBilling": {
       "enabled": false

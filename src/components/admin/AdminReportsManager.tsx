@@ -25,11 +25,12 @@ import { logAuditEvent } from '../../services/auditService';
 import { auth } from '../../firebase/config';
 
 interface Props {
-  bookings: Booking[];
-  services: Service[];
-  serviceMen: ServiceMan[];
+  bookings?: Booking[];
+  services?: Service[];
+  serviceMen?: ServiceMan[];
   franchisePartners?: FranchisePartner[];
   userRole?: 'admin' | 'franchise_admin';
+  currentUserRole?: string;
   assignedDistrictId?: string;
   assignedDistrictName?: string;
 }

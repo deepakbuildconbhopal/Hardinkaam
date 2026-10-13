@@ -1,0 +1,50 @@
+/* HARDINKAAM app-wide theme: landing look (dark navy + orange/blue glow, Poppins) for every screen EXCEPT the landing page.
+   Scoped with :not(:has(.hdk-landing)) so landing.css and the landing page stay untouched. */
+body:not(:has(.hdk-landing)){
+  --hdk-bg:#070b22; --hdk-card:#0f1638; --hdk-card2:#151d4a; --hdk-t:#eef1ff; --hdk-m:#9aa5d6;
+  --hdk-o:#ff7a00; --hdk-b:#2a4bd7; --hdk-line:rgba(255,255,255,.09);
+  --theme-primary:#ff7a00; --theme-primary-hover:#ff3d00; --theme-primary-light:rgba(255,122,0,.14);
+  --theme-primary-dark:#ffb000; --theme-badge-bg:rgba(255,122,0,.18); --theme-badge-text:#ffb000;
+  --theme-header-border:rgba(255,122,0,.35);
+  font-family:'Poppins','Plus Jakarta Sans',system-ui,sans-serif;
+  color:var(--hdk-t);
+  background:
+    radial-gradient(520px 420px at -5% -5%,rgba(255,122,0,.28),transparent 70%),
+    radial-gradient(560px 480px at 105% 105%,rgba(42,75,215,.32),transparent 70%),
+    var(--hdk-bg) fixed;
+}
+/* surfaces */
+body:not(:has(.hdk-landing)) :is(.bg-white,.bg-gray-50,.bg-slate-50,.bg-gray-100,.bg-slate-100,.bg-orange-50,.bg-neutral-50){background-color:var(--hdk-card)!important}
+body:not(:has(.hdk-landing)) :is(.bg-white\/90,.bg-white\/80,.bg-white\/95,.glass-panel,.glass-card){background:rgba(15,22,56,.82)!important;border-color:var(--hdk-line)!important;backdrop-filter:blur(14px)}
+body:not(:has(.hdk-landing)) :is(.bg-gray-200,.bg-slate-200){background-color:var(--hdk-card2)!important}
+/* text */
+body:not(:has(.hdk-landing)) :is(.text-gray-900,.text-gray-800,.text-gray-700,.text-slate-900,.text-slate-800,.text-slate-700,.text-black){color:var(--hdk-t)!important}
+body:not(:has(.hdk-landing)) :is(.text-gray-600,.text-gray-500,.text-gray-400,.text-slate-600,.text-slate-500,.text-slate-400){color:var(--hdk-m)!important}
+/* borders / dividers */
+body:not(:has(.hdk-landing)) :is(.border,.border-gray-100,.border-gray-200,.border-gray-300,.border-slate-100,.border-slate-200,.border-slate-300,.divide-gray-100>*,.divide-gray-200>*){border-color:var(--hdk-line)!important}
+/* inputs */
+body:not(:has(.hdk-landing)) :is(input,select,textarea):not([type=checkbox],[type=radio],[type=range]){background:rgba(255,255,255,.06)!important;color:var(--hdk-t)!important;border:1px solid var(--hdk-line)!important;border-radius:12px;transition:box-shadow .25s,border-color .25s}
+body:not(:has(.hdk-landing)) :is(input,select,textarea)::placeholder{color:var(--hdk-m)!important}
+body:not(:has(.hdk-landing)) :is(input,select,textarea):focus{outline:none;border-color:var(--hdk-o)!important;box-shadow:0 0 0 3px rgba(255,122,0,.25),0 0 18px rgba(255,122,0,.25)}
+body:not(:has(.hdk-landing)) option{background:var(--hdk-card);color:var(--hdk-t)}
+/* primary buttons (orange) get landing gradient */
+body:not(:has(.hdk-landing)) :is(.bg-orange-500,.bg-orange-600,.bg-orange-700,.bg-theme-primary){background-image:linear-gradient(90deg,#ff7a00,#ff3d00)!important;background-color:transparent!important;color:#fff!important;box-shadow:0 6px 22px rgba(255,122,0,.4)}
+body:not(:has(.hdk-landing)) :is(.text-orange-500,.text-orange-600,.text-orange-700){color:#ffb000!important}
+body:not(:has(.hdk-landing)) :is(.bg-blue-600,.bg-blue-500,.bg-indigo-600){background-image:linear-gradient(90deg,#2a4bd7,#5b3df5)!important;background-color:transparent!important}
+/* cards lift on hover, buttons pop on press */
+body:not(:has(.hdk-landing)) :is(.rounded-xl,.rounded-2xl,.rounded-3xl).shadow,
+body:not(:has(.hdk-landing)) :is(.rounded-xl,.rounded-2xl,.rounded-3xl):is(.shadow-sm,.shadow-md,.shadow-lg){transition:transform .3s,box-shadow .3s}
+body:not(:has(.hdk-landing)) :is(.rounded-xl,.rounded-2xl,.rounded-3xl):is(.shadow-sm,.shadow-md,.shadow-lg):hover{transform:translateY(-3px);box-shadow:0 12px 34px rgba(255,122,0,.18)}
+body:not(:has(.hdk-landing)) :is(button,[role=button],a.btn){transition:transform .2s,box-shadow .25s,filter .2s;position:relative;overflow:hidden}
+body:not(:has(.hdk-landing)) :is(button,[role=button]):not(:disabled):hover{transform:translateY(-2px) scale(1.03);filter:brightness(1.08)}
+body:not(:has(.hdk-landing)) :is(button,[role=button]):not(:disabled):active{transform:scale(.95)}
+/* click ripple + action toast animations (driven by src/theme/hdkFx.ts) */
+.hdk-ripple{position:absolute;border-radius:50%;pointer-events:none;background:radial-gradient(circle,rgba(255,176,0,.65),rgba(255,122,0,0) 70%);transform:scale(0);animation:hdk-rp .6s ease-out forwards}
+@keyframes hdk-rp{to{transform:scale(1);opacity:0}}
+.hdk-spark{position:fixed;z-index:99999;width:7px;height:7px;border-radius:50%;pointer-events:none;background:var(--c,#ff7a00);animation:hdk-sp .7s ease-out forwards}
+@keyframes hdk-sp{to{transform:translate(var(--x),var(--y)) scale(0);opacity:0}}
+body:not(:has(.hdk-landing)) .animate-entry,body:not(:has(.hdk-landing)) main>*{animation:hdk-in .45s cubic-bezier(.16,1,.3,1) both}
+@keyframes hdk-in{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
+body:not(:has(.hdk-landing)) ::-webkit-scrollbar{width:8px;height:8px}
+body:not(:has(.hdk-landing)) ::-webkit-scrollbar-thumb{background:linear-gradient(#ff7a00,#2a4bd7);border-radius:8px}
+@media (prefers-reduced-motion:reduce){.hdk-ripple,.hdk-spark{display:none}body *{animation-duration:.01ms!important;transition-duration:.01ms!important}}

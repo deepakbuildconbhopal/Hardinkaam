@@ -22,8 +22,9 @@ import {
   Download,
   MessageSquare,
 } from 'lucide-react';
-import { collection, getDocs, updateDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, updateDoc, doc, query, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../../utils/sparkQuotaGuard';
 import { FranchiseApplication, FranchiseCityReport, FranchiseStatus, FranchisePartner } from '../../types';
 import { ALL_INDIA_LOCATIONS, DEEPAK_BUILDCON_OFFICIAL, FRANCHISE_RULES_BY_TIER } from '../../data/indiaLocations';
 import { FranchiseNotificationModal } from '../franchise/FranchiseNotificationModal';
@@ -39,6 +40,7 @@ import {
   updateFranchiseStatus,
   ensureDefaultFranchisePartners,
 } from '../../services/franchisePartnerService';
+import { generateSecureTemporaryPassword } from '../../utils/secureCredentials';
 
 // Initial baseline representative city reports across India
 const SEED_CITY_REPORTS: FranchiseCityReport[] = [
@@ -189,7 +191,7 @@ export const AdminFranchiseReports: React.FC = () => {
   const [newPartnerPhone, setNewPartnerPhone] = useState('');
   const [newPartnerState, setNewPartnerState] = useState('Madhya Pradesh');
   const [newPartnerDistrict, setNewPartnerDistrict] = useState('Gwalior');
-  const [newPartnerPassword, setNewPartnerPassword] = useState('123456');
+  const [newPartnerPassword, setNewPartnerPassword] = useState(() => generateSecureTemporaryPassword());
   const [creatingPartner, setCreatingPartner] = useState(false);
   const [createPartnerError, setCreatePartnerError] = useState<string | null>(null);
 
@@ -272,7 +274,7 @@ export const AdminFranchiseReports: React.FC = () => {
         setNewPartnerName('');
         setNewPartnerEmail('');
         setNewPartnerPhone('');
-        setNewPartnerPassword('123456');
+        setNewPartnerPassword(generateSecureTemporaryPassword());
       } else {
         setCreatePartnerError(res.error || 'पार्टनर बनाने में विफल');
       }
@@ -288,20 +290,21 @@ export const AdminFranchiseReports: React.FC = () => {
     await updateFranchiseStatus(partner.franchisePartnerId, newStatus);
   };
 
-  // Fetch applications & live data from Firestore
+  // Fetch applications & live data from Firestore (bounded & quota-guarded)
   const fetchData = async () => {
+    if (isResourceExhausted()) return;
     setLoading(true);
     try {
-      // 1. Fetch applications
-      const appSnap = await getDocs(collection(db, 'franchise_applications'));
+      // 1. Fetch applications (capped)
+      const appSnap = await getDocs(query(collection(db, 'franchise_applications'), limit(50)));
       const appList: FranchiseApplication[] = [];
       appSnap.forEach((d) => {
         appList.push({ id: d.id, ...d.data() } as FranchiseApplication);
       });
       setApplications(appList);
 
-      // 2. Fetch live city reports if created in Firestore
-      const citySnap = await getDocs(collection(db, 'franchise_cities'));
+      // 2. Fetch live city reports if created in Firestore (capped)
+      const citySnap = await getDocs(query(collection(db, 'franchise_cities'), limit(50)));
       if (!citySnap.empty) {
         const liveCities: FranchiseCityReport[] = [];
         citySnap.forEach((d) => liveCities.push(d.data() as FranchiseCityReport));
@@ -309,6 +312,7 @@ export const AdminFranchiseReports: React.FC = () => {
       }
     } catch (err) {
       console.warn('Franchise data fetch notice:', err);
+      checkAndHandleQuotaError(err);
     } finally {
       setLoading(false);
     }
@@ -1018,7 +1022,16 @@ export const AdminFranchiseReports: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-stone-700 mb-1">शुरुआती पासवर्ड</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-bold text-stone-700">शुरुआती सुरक्षित पासवर्ड *</label>
+                  <button
+                    type="button"
+                    onClick={() => setNewPartnerPassword(generateSecureTemporaryPassword())}
+                    className="text-[11px] font-bold text-orange-600 hover:text-orange-700 underline cursor-pointer"
+                  >
+                    नया पासवर्ड जनरेट करें
+                  </button>
+                </div>
                 <input
                   type="text"
                   required

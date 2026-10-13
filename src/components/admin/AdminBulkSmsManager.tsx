@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { collection, onSnapshot, addDoc, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { checkAndHandleQuotaError } from '../../utils/sparkQuotaGuard';
 import { BulkSmsLog, BulkRecipientTarget, UserProfile, ServiceMan, VideoCallSession } from '../../types';
 import {
   generateWhatsAppVideoCallUrl,
@@ -47,7 +48,7 @@ export const AdminBulkSmsManager: React.FC<Props> = ({
   const [senderHeader, setSenderHeader] = useState('DBCBHO');
   const [channel, setChannel] = useState<'sms' | 'whatsapp' | 'both'>('both');
   const [messageText, setMessageText] = useState(
-    'नमस्ते [NAME]! दीपक बिल्डकॉन (HARDINKAAM) भोपाल में 60-मिनट होम सर्विस और लाइव वीडियो परामर्श उपलब्ध है। हेल्पलाइन: 9826012345'
+    'नमस्ते [NAME]! दीपक बिल्डकॉन (HARDINKAAM) भोपाल में 60-मिनट होम सर्विस और लाइव वीडियो परामर्श उपलब्ध है। हेल्पलाइन: 6267546945'
   );
   const [includeVideoLink, setIncludeVideoLink] = useState(false);
   const [generatedVideoRoomCode, setGeneratedVideoRoomCode] = useState('');
@@ -84,22 +85,33 @@ export const AdminBulkSmsManager: React.FC<Props> = ({
       },
       (err) => {
         console.warn('Bulk campaigns listener note:', err);
+        checkAndHandleQuotaError(err);
         setLoadingLogs(false);
       }
     );
 
-    // 2. Fetch users for accurate target counts
-    getDocs(collection(db, 'users')).then((snap) => {
-      const list: UserProfile[] = [];
-      snap.forEach((d) => list.push({ id: d.id, ...d.data() } as UserProfile));
-      if (list.length > 0) setFetchedUsers(list);
-    }).catch((e) => console.warn('User target fetch note:', e));
+    // 2. Fetch users for target counts only if not passed in props (bounded to 100)
+    if (!users || users.length === 0) {
+      getDocs(query(collection(db, 'users'), limit(100))).then((snap) => {
+        const list: UserProfile[] = [];
+        snap.forEach((d) => list.push({ id: d.id, ...d.data() } as UserProfile));
+        if (list.length > 0) setFetchedUsers(list);
+      }).catch((e) => {
+        console.warn('User target fetch note:', e);
+        checkAndHandleQuotaError(e);
+      });
+    }
 
-    getDocs(collection(db, 'service_men')).then((snap) => {
-      const list: ServiceMan[] = [];
-      snap.forEach((d) => list.push({ id: d.id, ...d.data() } as ServiceMan));
-      if (list.length > 0) setFetchedPros(list);
-    }).catch((e) => console.warn('Pro target fetch note:', e));
+    if (!serviceMen || serviceMen.length === 0) {
+      getDocs(query(collection(db, 'service_men'), limit(100))).then((snap) => {
+        const list: ServiceMan[] = [];
+        snap.forEach((d) => list.push({ id: d.id, ...d.data() } as ServiceMan));
+        if (list.length > 0) setFetchedPros(list);
+      }).catch((e) => {
+        console.warn('Pro target fetch note:', e);
+        checkAndHandleQuotaError(e);
+      });
+    }
 
     return () => unsub();
   }, []);
@@ -216,7 +228,7 @@ export const AdminBulkSmsManager: React.FC<Props> = ({
         setTargetGroup('all_users');
         setIncludeVideoLink(false);
         setMessageText(
-          'भोपाल में बारिश अलर्ट! वाटरप्रूफिंग, सीपेज व शॉर्ट-सर्किट से सुरक्षा हेतु दीपक बिल्डकॉन के प्रमाणित तकनीशियन 60 मिनट में उपलब्ध हैं। हेल्पलाइन: 9826012345'
+          'भोपाल में बारिश अलर्ट! वाटरप्रूफिंग, सीपेज व शॉर्ट-सर्किट से सुरक्षा हेतु दीपक बिल्डकॉन के प्रमाणित तकनीशियन 60 मिनट में उपलब्ध हैं। हेल्पलाइन: 6267546945'
         );
         break;
     }
@@ -519,7 +531,7 @@ export const AdminBulkSmsManager: React.FC<Props> = ({
                     rows={3}
                     value={customPhones}
                     onChange={(e) => setCustomPhones(e.target.value)}
-                    placeholder="9826012345, 9425088721, 9893077665..."
+                    placeholder="6267546945, 9425088721, 9893077665..."
                     className="w-full p-2.5 text-xs font-mono rounded-xl border border-stone-200"
                   />
                   <span className="text-[10px] text-stone-400">
@@ -591,7 +603,7 @@ export const AdminBulkSmsManager: React.FC<Props> = ({
                 {[
                   { tag: '[NAME]', label: 'ग्राहक का नाम' },
                   { tag: '[CITY]', label: 'शहर' },
-                  { tag: '[HELPLINE]', label: 'हेल्पलाइन 9826012345' },
+                  { tag: '[HELPLINE]', label: 'हेल्पलाइन 6267546945' },
                 ].map((t) => (
                   <button
                     key={t.tag}

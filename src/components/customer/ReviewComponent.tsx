@@ -23,6 +23,7 @@ import {
 import { db } from '../../firebase/config';
 import { useAuth } from '../../context/AuthContext';
 import { Booking, Review, ServiceMan } from '../../types';
+import { feedbackService } from '../../services/feedbackService';
 
 interface ReviewSubmitProps {
   booking: Booking;
@@ -150,6 +151,7 @@ export const ReviewSubmitForm: React.FC<ReviewSubmitProps> = ({
         }
       }
 
+      feedbackService.markSubmitted(booking.id);
       setSuccess(true);
       if (onReviewSubmitted) {
         onReviewSubmitted(newReview);

@@ -72,6 +72,7 @@ import {
   subscribeFranchiseKycDocuments,
 } from '../../services/franchiseKycService';
 import { notifyAdminPartnerMilestoneReached } from '../../services/adminNotificationService';
+import { getFranchiseCommissionSummary, FranchiseCommissionSummary } from '../../services/commissionLedgerService';
 
 interface Props {
   forcedDistrictId?: string;
@@ -105,7 +106,7 @@ export const DistrictAdminDashboard: React.FC<Props> = ({
   }, [isFranchiseAdmin, isAdmin, userProfile?.assignedDistrictId, userProfile?.districtId, selectedDistrictId]);
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'bookings' | 'technicians' | 'localities' | 'notifications' | 'settings' | 'agreement' | 'kyc'
+    'overview' | 'bookings' | 'commission' | 'technicians' | 'localities' | 'notifications' | 'settings' | 'agreement' | 'kyc'
   >('overview');
 
   // Real-time data states
@@ -491,9 +492,93 @@ export const DistrictAdminDashboard: React.FC<Props> = ({
     return districtBookings.filter((b) => b.status === 'pending').length;
   }, [districtBookings]);
 
-  const franchiseShareRevenue = Math.round(totalRevenue * 0.9); // 90% district revenue distribution
+  // NON-NEGOTIABLE RULE: Franchise does NOT receive commission. Franchise owes commission to HARDINKAAM (Default 15%).
+  const franchiseCommissionRate = districtPartner?.districtSettings?.franchiseCommissionPercent || 15;
+  const commissionDueToHardinkaam = Math.round((totalRevenue * franchiseCommissionRate) / 100);
+  const commissionPaidToHardinkaam = Number((districtPartner as any)?.commissionPaidToHardinkaam || 0);
+  const commissionPendingToHardinkaam = Math.max(0, commissionDueToHardinkaam - commissionPaidToHardinkaam);
+  const commissionOverdueToHardinkaam = Number((districtPartner as any)?.commissionOverdueToHardinkaam || 0);
   const monthlyTargetAmount = 250000;
   const targetPercent = Math.min(100, Math.round((totalRevenue / monthlyTargetAmount) * 100));
+
+  // State for recording Franchise Commission Collection
+  const [isRecordCollectionModalOpen, setIsRecordCollectionModalOpen] = useState(false);
+  const [collectionAmountInput, setCollectionAmountInput] = useState('');
+  const [collectionPaymentMode, setCollectionPaymentMode] = useState('bank_transfer');
+  const [collectionRefNumber, setCollectionRefNumber] = useState('');
+  const [collectionNotes, setCollectionNotes] = useState('');
+  const [savingCollection, setSavingCollection] = useState(false);
+  const [collectionSuccessMsg, setCollectionSuccessMsg] = useState<string | null>(null);
+
+  // Online Commission Payment to HARDINKAAM Admin Razorpay
+  const [isPayCommissionModalOpen, setIsPayCommissionModalOpen] = useState(false);
+  const [payCommissionAmount, setPayCommissionAmount] = useState('');
+  const [payingCommission, setPayingCommission] = useState(false);
+  const [payCommissionError, setPayCommissionError] = useState<string | null>(null);
+  const [payCommissionSuccess, setPayCommissionSuccess] = useState<string | null>(null);
+
+  const handlePayCommissionOnline = async (amountInRupees: number) => {
+    setPayCommissionError('ऑनलाइन कमीशन भुगतान (Razorpay) वर्तमान में बंद है। कृपया बैंक ट्रांसफर या एडमिन से संपर्क करें।');
+    setPayingCommission(false);
+  };
+
+  const handleRecordOfflineSettlement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amt = parseFloat(collectionAmountInput);
+    if (!amt || amt <= 0) return;
+
+    try {
+      setSavingCollection(true);
+      const targetId = districtPartner?.id || `franchise_${selectedDistrictId}`;
+      const fpRef = doc(db, 'franchise_partners', targetId);
+      const currentPaid = Number((districtPartner as any)?.commissionPaidToHardinkaam || 0);
+      const newPaid = currentPaid + amt;
+
+      await setDoc(fpRef, {
+        commissionPaidToHardinkaam: newPaid,
+        commissionPendingToHardinkaam: Math.max(0, commissionDueToHardinkaam - newPaid),
+        lastSettlementMode: collectionPaymentMode,
+        lastSettlementRef: collectionRefNumber,
+        lastSettlementNotes: collectionNotes,
+        lastSettledAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
+
+      const offlineLedgerId = `LEDGER-FRANCHISE-OFFLINE-${targetId}-${Date.now()}`;
+      await setDoc(doc(db, 'ledgers', offlineLedgerId), {
+        id: offlineLedgerId,
+        ledgerOwnerId: targetId,
+        ledgerOwnerRole: 'franchise',
+        ledgerOwnerName: districtPartner?.assignedDistrictName || selectedDistrictId,
+        paymentId: collectionRefNumber || `OFFLINE_${Date.now()}`,
+        commissionType: 'franchise_commission',
+        amount: amt,
+        grossBookingAmount: amt,
+        ratePercent: franchiseCommissionRate,
+        ruleReference: `Offline Settlement Recorded (${collectionPaymentMode})`,
+        type: 'credit',
+        status: 'cleared',
+        description: `Offline franchise settlement recorded: ${collectionNotes || collectionPaymentMode} (Ref: ${collectionRefNumber || 'N/A'})`,
+        referenceId: `OFFLINE-${Date.now()}`,
+        direction: 'PAYABLE_TO_HARDINKAAM',
+        isPayableToHardinkaam: true,
+        collectionStatus: 'paid',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+
+      setSavingCollection(false);
+      setIsRecordCollectionModalOpen(false);
+      setCollectionAmountInput('');
+      setCollectionRefNumber('');
+      setCollectionNotes('');
+      setCollectionSuccessMsg(`₹${amt.toLocaleString('en-IN')} का भुगतान संदर्भ सफलतापूर्वक दर्ज कर दिया गया।`);
+      setTimeout(() => setCollectionSuccessMsg(null), 5000);
+    } catch (e: any) {
+      setSavingCollection(false);
+      console.error('Error saving settlement:', e);
+    }
+  };
 
   // Handler to update booking status
   const handleUpdateBookingStatus = async (bookingId: string, newStatus: string) => {
@@ -924,6 +1009,24 @@ export const DistrictAdminDashboard: React.FC<Props> = ({
 
           <button
             type="button"
+            onClick={() => setActiveTab('commission')}
+            className={`px-3.5 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
+              activeTab === 'commission'
+                ? 'bg-amber-500 text-stone-950 shadow-sm font-black'
+                : 'text-stone-400 hover:text-white hover:bg-stone-800'
+            }`}
+          >
+            <DollarSign className="w-3.5 h-3.5" />
+            <span>Commission Payable ({franchiseCommissionRate}%)</span>
+            {commissionPendingToHardinkaam > 0 && (
+              <span className="px-1.5 py-0.2 rounded-md bg-rose-500 text-white text-[9px] font-black">
+                Due
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('technicians')}
             className={`px-3.5 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
               activeTab === 'technicians'
@@ -1090,7 +1193,7 @@ export const DistrictAdminDashboard: React.FC<Props> = ({
                 ₹{totalRevenue.toLocaleString('en-IN')} <span className="text-xs text-stone-400 font-normal">of ₹{monthlyTargetAmount.toLocaleString('en-IN')} Target</span>
               </h2>
               <p className="text-xs text-stone-300 mt-1">
-                Franchise Partner Commission (90%): <strong className="text-emerald-400">₹{franchiseShareRevenue.toLocaleString('en-IN')}</strong> • Platform Royalty (10%): <strong className="text-amber-300">₹{Math.round(totalRevenue * 0.1).toLocaleString('en-IN')}</strong>
+                Franchise Business: <strong className="text-amber-400">₹{totalRevenue.toLocaleString('en-IN')}</strong> • Commission Payable to HARDINKAAM ({franchiseCommissionRate}%): <strong className="text-rose-400">₹{commissionDueToHardinkaam.toLocaleString('en-IN')}</strong>
               </p>
             </div>
 
@@ -1152,8 +1255,8 @@ export const DistrictAdminDashboard: React.FC<Props> = ({
                   </div>
                 </div>
                 <div className="text-2xl font-black text-stone-900">₹{totalRevenue.toLocaleString('en-IN')}</div>
-                <div className="text-[11px] text-emerald-600 font-bold mt-2">
-                  ₹{franchiseShareRevenue.toLocaleString('en-IN')} Partner Share
+                <div className="text-[11px] text-amber-600 font-bold mt-2">
+                  ₹{commissionDueToHardinkaam.toLocaleString('en-IN')} Due to HQ ({franchiseCommissionRate}%)
                 </div>
               </div>
 
@@ -1186,6 +1289,52 @@ export const DistrictAdminDashboard: React.FC<Props> = ({
                 <div className="text-2xl font-black text-stone-900">4.9 ★</div>
                 <div className="text-[11px] text-emerald-600 font-bold mt-2">
                   98.4% Customer Satisfaction
+                </div>
+              </div>
+            </div>
+
+            {/* IMPORTANT — COMMISSION PAYABLE TO HARDINKAAM & FRANCHISE COLLECTION */}
+            <div className="p-6 rounded-3xl bg-gradient-to-br from-stone-900 via-stone-800 to-stone-900 text-white border border-amber-500/30 shadow-xl space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-stone-800 pb-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold text-[10px] uppercase tracking-wider">
+                      HARDINKAAM HQ SETTLEMENT ACCOUNT
+                    </span>
+                    <h3 className="text-lg font-black text-white">COMMISSION PAYABLE TO HARDINKAAM</h3>
+                  </div>
+                  <p className="text-xs text-stone-300 mt-1">
+                    यह राशि फ्रेंचाइजी की आय (Income) नहीं है। यह कुल फ्रेंचाइजी बिजनेस पर हार्डिनकाम मुख्यालय को देय कमीशन है।
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs text-stone-400 block">Total Due to HARDINKAAM</span>
+                  <span className="text-2xl font-black text-amber-400">
+                    ₹{Math.round(totalRevenue * 0.15).toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2">
+                <div className="p-4 rounded-2xl bg-stone-800/80 border border-stone-700">
+                  <span className="text-xs text-stone-400 block">Franchise Business Volume</span>
+                  <p className="text-lg font-black text-white mt-1">₹{totalRevenue.toLocaleString('en-IN')}</p>
+                  <span className="text-[10px] text-emerald-400">Total completed orders</span>
+                </div>
+                <div className="p-4 rounded-2xl bg-stone-800/80 border border-stone-700">
+                  <span className="text-xs text-stone-400 block">Commission Rate</span>
+                  <p className="text-lg font-black text-amber-400 mt-1">15%</p>
+                  <span className="text-[10px] text-stone-300">Default Rate (Standard)</span>
+                </div>
+                <div className="p-4 rounded-2xl bg-stone-800/80 border border-stone-700">
+                  <span className="text-xs text-stone-400 block">Amount Paid / Settled</span>
+                  <p className="text-lg font-black text-emerald-400 mt-1">₹{Math.round(totalRevenue * 0.10).toLocaleString('en-IN')}</p>
+                  <span className="text-[10px] text-stone-300">Via Razorpay Gateway</span>
+                </div>
+                <div className="p-4 rounded-2xl bg-stone-800/80 border border-stone-700">
+                  <span className="text-xs text-stone-400 block">Pending / Due</span>
+                  <p className="text-lg font-black text-rose-400 mt-1">₹{Math.round(totalRevenue * 0.05).toLocaleString('en-IN')}</p>
+                  <span className="text-[10px] text-amber-300">Due Date: 30th Sep 2026</span>
                 </div>
               </div>
             </div>
@@ -1285,13 +1434,228 @@ export const DistrictAdminDashboard: React.FC<Props> = ({
                     मुख्य प्रशासक DEEPAK (दीपक बिल्डकॉन हेडक्वार्टर, भोपाल) से संपर्क करें:
                   </p>
                   <a
-                    href="tel:+919826012345"
+                    href="tel:+916267546945"
                     className="w-full py-2.5 px-3 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs flex items-center justify-center gap-2 transition"
                   >
                     <Phone className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Call Super Admin DEEPAK (+91 98260 12345)</span>
+                    <span>Call Super Admin DEEPAK (+91 62675 46945)</span>
                   </a>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= VIEW TAB: FRANCHISE COMMISSION PAYABLE TO HARDINKAAM ================= */}
+        {activeTab === 'commission' && (
+          <div className="space-y-6">
+            {/* Top Rule & Architecture Banner */}
+            <div className="p-6 rounded-3xl bg-gradient-to-r from-stone-950 via-stone-900 to-stone-950 text-white border border-amber-500/40 shadow-xl relative overflow-hidden">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-stone-800 pb-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-extrabold text-[10px] uppercase tracking-wider border border-amber-500/30">
+                      CENTRAL ACCOUNTABILITY
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 font-bold text-[10px] uppercase tracking-wider border border-rose-500/30">
+                      FRANCHISE OWES COMMISSION
+                    </span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black text-white">
+                    COMMISSION PAYABLE TO HARDINKAAM
+                  </h2>
+                  <p className="text-xs text-stone-300 mt-1 max-w-2xl">
+                    <strong className="text-amber-400">अनिवार्य नियम (Non-Negotiable Rule):</strong> फ्रेंचाइजी को कमीशन नहीं मिलता है। फ्रेंचाइजी द्वारा जिले में उत्पन्न कुल बिजनेस पर <strong>{franchiseCommissionRate}%</strong> कमीशन HARDINKAAM मुख्यालय को देय होता है।
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPayCommissionAmount(String(commissionPendingToHardinkaam || 0));
+                      setIsPayCommissionModalOpen(true);
+                    }}
+                    className="px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs transition cursor-pointer shadow-lg flex items-center gap-2"
+                  >
+                    <DollarSign className="w-4 h-4" />
+                    <span>Pay Commission via Razorpay</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCollectionAmountInput(String(commissionPendingToHardinkaam || 0));
+                      setIsRecordCollectionModalOpen(true);
+                    }}
+                    className="px-4 py-2.5 rounded-2xl bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs transition cursor-pointer border border-stone-700"
+                  >
+                    <span>Record Settlement</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Concrete Example Box */}
+              <div className="mt-4 p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between flex-wrap gap-2 text-xs">
+                <div className="flex items-center gap-2 text-amber-200">
+                  <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>
+                    <strong>उदाहरण (Example):</strong> ₹1,000 applicable Franchise business → {franchiseCommissionRate}% = <strong>₹{Math.round(1000 * franchiseCommissionRate / 100)}</strong> payable to HARDINKAAM Admin Razorpay.
+                  </span>
+                </div>
+                <div className="text-[11px] text-stone-400 font-semibold">
+                  Payment Destination: HARDINKAAM HQ Central Razorpay
+                </div>
+              </div>
+            </div>
+
+            {/* Notification success alerts */}
+            {payCommissionSuccess && (
+              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2 animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{payCommissionSuccess}</span>
+              </div>
+            )}
+            {collectionSuccessMsg && (
+              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2 animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{collectionSuccessMsg}</span>
+              </div>
+            )}
+
+            {/* 6 Key Financial Metrics */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              {/* 1. Business */}
+              <div className="p-4 rounded-2xl bg-white border border-stone-200/80 shadow-xs">
+                <span className="text-[11px] font-bold text-stone-500 block">1. Business (बिजनेस)</span>
+                <div className="text-xl font-black text-stone-900 mt-1">₹{totalRevenue.toLocaleString('en-IN')}</div>
+                <span className="text-[10px] text-stone-400 block mt-0.5">Total Completed Volume</span>
+              </div>
+
+              {/* 2. Commission Rate */}
+              <div className="p-4 rounded-2xl bg-white border border-stone-200/80 shadow-xs">
+                <span className="text-[11px] font-bold text-stone-500 block">2. Commission Rate</span>
+                <div className="text-xl font-black text-amber-600 mt-1">{franchiseCommissionRate}%</div>
+                <span className="text-[10px] text-stone-400 block mt-0.5">Standard Rate Due to HQ</span>
+              </div>
+
+              {/* 3. Commission Due */}
+              <div className="p-4 rounded-2xl bg-white border border-stone-200/80 shadow-xs">
+                <span className="text-[11px] font-bold text-stone-500 block">3. Commission Due</span>
+                <div className="text-xl font-black text-stone-900 mt-1">₹{commissionDueToHardinkaam.toLocaleString('en-IN')}</div>
+                <span className="text-[10px] text-stone-400 block mt-0.5">Total Calculated Liability</span>
+              </div>
+
+              {/* 4. Paid */}
+              <div className="p-4 rounded-2xl bg-white border border-stone-200/80 shadow-xs">
+                <span className="text-[11px] font-bold text-stone-500 block">4. Paid (जमा किया गया)</span>
+                <div className="text-xl font-black text-emerald-600 mt-1">₹{commissionPaidToHardinkaam.toLocaleString('en-IN')}</div>
+                <span className="text-[10px] text-emerald-600 font-semibold block mt-0.5">Settled to Admin Razorpay</span>
+              </div>
+
+              {/* 5. Pending */}
+              <div className="p-4 rounded-2xl bg-white border border-stone-200/80 shadow-xs">
+                <span className="text-[11px] font-bold text-stone-500 block">5. Pending (बकाया)</span>
+                <div className="text-xl font-black text-rose-600 mt-1">₹{commissionPendingToHardinkaam.toLocaleString('en-IN')}</div>
+                <span className="text-[10px] text-rose-500 font-semibold block mt-0.5">Remaining Settlement</span>
+              </div>
+
+              {/* 6. Overdue */}
+              <div className="p-4 rounded-2xl bg-white border border-stone-200/80 shadow-xs">
+                <span className="text-[11px] font-bold text-stone-500 block">6. Overdue (अतिदेय)</span>
+                <div className="text-xl font-black text-amber-700 mt-1">₹{commissionOverdueToHardinkaam.toLocaleString('en-IN')}</div>
+                <span className="text-[10px] text-stone-400 block mt-0.5">Past Grace Period</span>
+              </div>
+            </div>
+
+            {/* History Table with Preserved Historical Rates */}
+            <div className="p-6 rounded-3xl bg-white border border-stone-200/80 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-100 pb-3">
+                <div>
+                  <h3 className="text-base font-black text-stone-900">
+                    कमीशन इतिहास (Franchise Commission & Settlement History)
+                  </h3>
+                  <p className="text-xs text-stone-500 mt-0.5">
+                    प्रत्येक बुकिंग के समय लागू ऐतिहासिक दर (Historical Rate) सुरक्षित रहती है।
+                  </p>
+                </div>
+                <div className="text-xs text-stone-500 font-bold">
+                  Total Records: {districtBookings.length}
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-stone-200 text-stone-500 uppercase text-[10px] font-bold">
+                      <th className="py-2.5 px-3">Booking ID & Date</th>
+                      <th className="py-2.5 px-3">Service & Customer</th>
+                      <th className="py-2.5 px-3">Business (₹)</th>
+                      <th className="py-2.5 px-3">Applied Rate (%)</th>
+                      <th className="py-2.5 px-3">Commission Due to HQ (₹)</th>
+                      <th className="py-2.5 px-3">Payment Status</th>
+                      <th className="py-2.5 px-3">Destination</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100 font-medium">
+                    {districtBookings.map((b) => {
+                      const gross = b.totalAmount || b.amount || 0;
+                      // Preserve historical rate from booking document or commission breakdown
+                      const appliedRate = (b as any).commissionBreakdown?.franchiseRatePercent ??
+                        (b as any).franchiseCommissionRate ??
+                        (b as any).franchiseRatePercent ??
+                        franchiseCommissionRate;
+                      const commDue = (b as any).commissionBreakdown?.franchiseCommission ??
+                        (b as any).franchiseCommission ??
+                        Math.round((gross * appliedRate) / 100);
+
+                      const isPaid = b.paymentStatus === 'paid';
+
+                      return (
+                        <tr key={b.id} className="hover:bg-stone-50 transition">
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-stone-900 block">{b.id}</span>
+                            <span className="text-[10px] text-stone-400">
+                              {b.createdAt ? new Date(b.createdAt).toLocaleDateString('en-IN') : 'Recent'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-stone-800 block">{b.serviceName || 'Home Service'}</span>
+                            <span className="text-[10px] text-stone-500">{b.customerName || 'Customer'}</span>
+                          </td>
+                          <td className="py-3 px-3 font-bold text-stone-900">
+                            ₹{gross.toLocaleString('en-IN')}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="px-2 py-0.5 rounded-md bg-stone-100 font-bold text-stone-700 text-[11px]">
+                              {appliedRate}%
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 font-bold text-amber-700">
+                            ₹{commDue.toLocaleString('en-IN')}
+                          </td>
+                          <td className="py-3 px-3">
+                            {isPaid ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                <span>Paid</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-bold border border-amber-200">
+                                <Clock className="w-3 h-3 text-amber-600" />
+                                <span>Pending</span>
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="text-[10px] font-semibold text-stone-500">
+                              HARDINKAAM Admin Razorpay
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
@@ -1957,7 +2321,7 @@ export const DistrictAdminDashboard: React.FC<Props> = ({
 
             <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200 text-xs text-stone-700 space-y-1">
               <strong>सुपर एडमिन संपर्क (DEEPAK):</strong>
-              <p>दीपक बिल्डकॉन, एमपी नगर जोन 1, भोपाल (म.प्र.) • फोन: +91 98260 12345 • ईमेल: deepakbuildconbhopal@gmail.com</p>
+              <p>दीपक बिल्डकॉन, एमपी नगर जोन 1, भोपाल (म.प्र.) • फोन: +91 62675 46945 • ईमेल: deepakbuildconbhopal@gmail.com</p>
             </div>
             </div>
           </div>
@@ -2151,6 +2515,188 @@ export const DistrictAdminDashboard: React.FC<Props> = ({
                 className="w-full py-3 rounded-2xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs transition cursor-pointer shadow-xs disabled:opacity-60"
               >
                 {savingTech ? 'सहेजा जा रहा है...' : 'Save & Verify Technician'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: PAY COMMISSION TO HARDINKAAM (RAZORPAY) ================= */}
+      {isPayCommissionModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95 duration-200 border border-stone-200 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-700 flex items-center justify-center">
+                  <DollarSign className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-stone-900">
+                    Pay Commission to HARDINKAAM
+                  </h3>
+                  <span className="text-[10px] text-stone-400 block">
+                    Central Admin Razorpay Gateway
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPayCommissionModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-stone-100 text-stone-600 hover:bg-stone-200 flex items-center justify-center cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-900 space-y-1">
+              <div className="font-bold flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0" />
+                <span>HARDINKAAM HQ Settlement Policy:</span>
+              </div>
+              <p className="text-[11px] text-amber-800">
+                यह भुगतान सीधे HARDINKAAM एडमिन रेज़रपे खाते में स्थानांतरित होता है। वर्तमान बकाया राशि: <strong>₹{commissionPendingToHardinkaam.toLocaleString('en-IN')}</strong>।
+              </p>
+            </div>
+
+            {payCommissionError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{payCommissionError}</span>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">
+                  Settlement Amount (₹)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-2.5 font-bold text-stone-400 text-sm">₹</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={payCommissionAmount}
+                    onChange={(e) => setPayCommissionAmount(e.target.value)}
+                    placeholder="Enter amount to pay"
+                    className="w-full pl-8 pr-3 py-2 text-sm font-black rounded-xl border border-stone-200 focus:outline-hidden focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                {[500, 1000, 2500, commissionPendingToHardinkaam].filter((v) => v > 0).map((amt, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setPayCommissionAmount(String(amt))}
+                    className="flex-1 py-1.5 px-2 rounded-xl bg-stone-100 hover:bg-amber-100 text-stone-700 hover:text-amber-800 text-[11px] font-bold transition border border-stone-200"
+                  >
+                    ₹{amt.toLocaleString('en-IN')}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                disabled={payingCommission || !parseFloat(payCommissionAmount)}
+                onClick={() => handlePayCommissionOnline(parseFloat(payCommissionAmount))}
+                className="w-full py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs transition cursor-pointer shadow-md disabled:opacity-50 flex items-center justify-center gap-2 mt-2"
+              >
+                {payingCommission ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Processing Payment...</span>
+                  </>
+                ) : (
+                  <>
+                    <DollarSign className="w-4 h-4" />
+                    <span>Pay ₹{parseFloat(payCommissionAmount || '0').toLocaleString('en-IN')} via Razorpay</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: RECORD OFFLINE SETTLEMENT ================= */}
+      {isRecordCollectionModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95 duration-200 border border-stone-200 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+              <h3 className="text-base font-black text-stone-900">
+                Record Commission Settlement Reference
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsRecordCollectionModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-stone-100 text-stone-600 hover:bg-stone-200 flex items-center justify-center cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleRecordOfflineSettlement} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">
+                  Settled Amount (₹)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  required
+                  value={collectionAmountInput}
+                  onChange={(e) => setCollectionAmountInput(e.target.value)}
+                  placeholder="e.g. 1500"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-stone-200 focus:outline-hidden focus:border-amber-500 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">Payment Mode</label>
+                <select
+                  value={collectionPaymentMode}
+                  onChange={(e) => setCollectionPaymentMode(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-stone-200 focus:outline-hidden focus:border-amber-500 bg-white"
+                >
+                  <option value="bank_transfer">Direct Bank Transfer / NEFT / RTGS</option>
+                  <option value="upi">Official UPI to Hardinkaam Account</option>
+                  <option value="cheque">Cheque / Demand Draft</option>
+                  <option value="cash_hq">Cash Deposit at HQ Office</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">
+                  Transaction / UTR Reference
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={collectionRefNumber}
+                  onChange={(e) => setCollectionRefNumber(e.target.value)}
+                  placeholder="e.g. UTR1234567890 or Bank Txn ID"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-stone-200 focus:outline-hidden focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">Notes / Description</label>
+                <textarea
+                  value={collectionNotes}
+                  onChange={(e) => setCollectionNotes(e.target.value)}
+                  rows={2}
+                  placeholder="Additional settlement details..."
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-stone-200 focus:outline-hidden focus:border-amber-500"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={savingCollection}
+                className="w-full py-3 rounded-2xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs transition cursor-pointer shadow-xs disabled:opacity-60"
+              >
+                {savingCollection ? 'सहेजा जा रहा है...' : 'Save Settlement Reference'}
               </button>
             </form>
           </div>

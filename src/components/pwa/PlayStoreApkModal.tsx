@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import {
   Smartphone,
-  Download,
   CheckCircle2,
   ShieldCheck,
   Zap,
-  HardDriveDownload,
-  X
+  Info,
+  Clock,
+  X,
+  Share,
+  PlusSquare,
 } from 'lucide-react';
 import { usePWAInstall } from './usePWAInstall';
 
@@ -17,41 +19,20 @@ interface PlayStoreApkModalProps {
 
 export const PlayStoreApkModal: React.FC<PlayStoreApkModalProps> = ({ isOpen, onClose }) => {
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
-  const [downloading, setDownloading] = useState(false);
-  const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installSuccess, setInstallSuccess] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleDownloadAPK = () => {
-    setDownloading(true);
-    
-    // 1. Direct browser download prompt for the PWA APK file
-    const link = document.createElement('a');
-    link.href = '/hardinkaam-app.apk';
-    link.setAttribute('download', 'HARDINKAAM-PWA.apk');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    // 2. Trigger PWA native browser prompt if available
-    if (isInstallable) {
-      install().catch(() => {});
-    }
-
-    setTimeout(() => {
-      setDownloading(false);
-      setDownloadSuccess(true);
-      setTimeout(() => setDownloadSuccess(false), 5000);
-    }, 1000);
-  };
-
   const handleWebPWAInstall = async () => {
     if (isInstallable) {
-      await install();
-    } else if (isIOS) {
-      alert('iPhone / Safari पर इंस्टॉल करने के लिए Share बटन ⎋ पर टैप करें और "Add to Home Screen" चुनें।');
-    } else {
-      handleDownloadAPK();
+      setInstalling(true);
+      const success = await install();
+      setInstalling(false);
+      if (success) {
+        setInstallSuccess(true);
+        setTimeout(() => setInstallSuccess(false), 5000);
+      }
     }
   };
 
@@ -70,11 +51,11 @@ export const PlayStoreApkModal: React.FC<PlayStoreApkModalProps> = ({ isOpen, on
                   Official Mobile App
                 </span>
                 <span className="flex items-center gap-1 text-[11px] text-white/90 font-medium">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" /> PWA APK Ready
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" /> PWA Instant App
                 </span>
               </div>
               <h2 className="text-xl font-black tracking-tight text-white mt-0.5">
-                Download HARDINKAAM PWA APK
+                HARDINKAAM Mobile App
               </h2>
             </div>
           </div>
@@ -89,60 +70,92 @@ export const PlayStoreApkModal: React.FC<PlayStoreApkModalProps> = ({ isOpen, on
 
         {/* Modal Content */}
         <div className="p-6 space-y-5 text-stone-800 dark:text-stone-200">
-          {downloadSuccess && (
+          {(installSuccess || isInstalled) && (
             <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-900 dark:text-emerald-200 flex items-center gap-2 font-bold animate-in fade-in">
               <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-              <span>PWA APK फाइल डाउनलोड शुरू हो गई है! डाउनलोड्स में जाकर ऐप इंस्टॉल करें।</span>
+              <span>✓ HARDINKAAM वेब ऐप आपकी होम स्क्रीन पर सक्रिय और इंस्टॉल है!</span>
             </div>
           )}
 
-          {/* Dedicated Prominent PWA APK Download Button */}
+          {/* Prominent PWA Web App Installation Section */}
           <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-br from-orange-50 via-amber-50/60 to-orange-100/40 dark:from-stone-800 dark:to-stone-850 border-2 border-orange-300/80 dark:border-orange-500/30 space-y-4 shadow-sm">
             <div className="space-y-1.5 text-center sm:text-left">
               <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300 text-[11px] font-black uppercase">
-                <HardDriveDownload className="w-3.5 h-3.5" />
-                <span>Direct PWA APK Package</span>
+                <Zap className="w-3.5 h-3.5" />
+                <span>Instant Progressive Web App</span>
               </div>
               <h3 className="font-black text-stone-900 dark:text-white text-lg">
-                Download PWA APK File
+                Install Official Web App (PWA)
               </h3>
               <p className="text-xs text-stone-600 dark:text-stone-400 leading-relaxed">
-                ब्राउज़र के माध्यम से तुरंत HARDINKAAM PWA APK फाइल डाउनलोड करें और अपने डिवाइस पर बिना किसी रुकावट के तेज अनुभव पाएं।
+                1-क्लिक में अपने मोबाइल की होम स्क्रीन पर HARDINKAAM ऐप जोड़ें। 0.5 सेकंड लोडिंग, ऑफ़लाइन सपोर्ट और फुल-स्क्रीन अनुभव बिना किसी अतिरिक्त स्टोरेज के।
               </p>
             </div>
 
-            {/* Prominent Action Button */}
+            {/* Action Area */}
             <div className="pt-2 flex flex-col gap-2.5">
-              <button
-                id="btn-download-pwa-apk-modal"
-                type="button"
-                onClick={handleDownloadAPK}
-                disabled={downloading}
-                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-orange-600 via-amber-600 to-orange-700 hover:from-orange-500 hover:to-amber-500 text-white font-black text-sm sm:text-base shadow-lg shadow-orange-600/30 flex items-center justify-center gap-2.5 transition active:scale-[0.98] cursor-pointer disabled:opacity-75"
-              >
-                {downloading ? (
-                  <>
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    <span>डाउनलोड शुरू हो रहा है...</span>
-                  </>
-                ) : (
-                  <>
-                    <Download className="w-5 h-5 text-amber-200" />
-                    <span>📲 Download PWA APK File (डाउनलोड करें)</span>
-                  </>
-                )}
-              </button>
-
-              {isInstallable && (
+              {isInstalled ? (
+                <div className="w-full py-3 px-4 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 font-bold text-xs sm:text-sm flex items-center justify-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>App Already Installed ✓</span>
+                </div>
+              ) : isInstallable ? (
                 <button
+                  id="btn-install-pwa-modal"
                   type="button"
                   onClick={handleWebPWAInstall}
-                  className="w-full py-2.5 px-4 rounded-xl bg-stone-900 dark:bg-stone-800 hover:bg-stone-800 text-stone-100 font-bold text-xs flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer"
+                  disabled={installing}
+                  className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-orange-600 via-amber-600 to-orange-700 hover:from-orange-500 hover:to-amber-500 text-white font-black text-sm sm:text-base shadow-lg shadow-orange-600/30 flex items-center justify-center gap-2.5 transition active:scale-[0.98] cursor-pointer disabled:opacity-75"
                 >
-                  <Zap className="w-3.5 h-3.5 text-amber-400" />
-                  <span>{isInstalled ? 'App Already Installed ✓' : 'Instant 1-Click Web Install'}</span>
+                  {installing ? (
+                    <>
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>इंस्टॉल हो रहा है...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-5 h-5 text-amber-200" />
+                      <span>📲 Install Web App (होम स्क्रीन पर जोड़ें)</span>
+                    </>
+                  )}
                 </button>
+              ) : isIOS ? (
+                <div className="p-3.5 rounded-2xl bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 space-y-2 text-xs">
+                  <p className="font-bold text-stone-900 dark:text-stone-100 flex items-center gap-1.5">
+                    <Share className="w-4 h-4 text-orange-600" /> iPhone / iPad पर इंस्टॉल करें:
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1 text-stone-600 dark:text-stone-300 text-[11px] leading-relaxed">
+                    <li>Safari में नीचे स्थित <strong>Share बटन (⎋)</strong> पर टैप करें।</li>
+                    <li>नीचे स्क्रॉल करके <strong>"Add to Home Screen" <PlusSquare className="w-3.5 h-3.5 inline mx-0.5" /></strong> चुनें।</li>
+                  </ol>
+                </div>
+              ) : (
+                <div className="p-3.5 rounded-2xl bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 text-xs text-stone-700 dark:text-stone-300 space-y-1">
+                  <p className="font-bold text-stone-900 dark:text-stone-100 flex items-center gap-1.5">
+                    <Info className="w-4 h-4 text-orange-600" /> आसान इंस्टॉलेशन निर्देश:
+                  </p>
+                  <p className="text-[11px] text-stone-600 dark:text-stone-400">
+                    अपने मोबाइल ब्राउज़र मेनू (⋮) पर टैप करें और <strong>"Add to Home Screen"</strong> या <strong>"Install app"</strong> चुनें।
+                  </p>
+                </div>
               )}
+            </div>
+          </div>
+
+          {/* Safe Android App Status Notification */}
+          <div className="p-4 rounded-2xl bg-stone-50 dark:bg-stone-800/60 border border-stone-200 dark:border-stone-700/60 flex items-start gap-3 text-xs">
+            <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0 mt-0.5">
+              <Clock className="w-4 h-4" />
+            </div>
+            <div className="space-y-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-stone-900 dark:text-stone-100">
+                  Android app is currently being prepared.
+                </span>
+              </div>
+              <p className="text-[11px] text-stone-500 dark:text-stone-400 leading-relaxed">
+                गूगल प्ले स्टोर और स्टैंडअलोन एंड्रॉयड पैकेज तैयार किया जा रहा है। तब तक तुरंत और सुगम अनुभव के लिए ऊपर दिए गए आधिकारिक PWA वेब ऐप का उपयोग करें।
+              </p>
             </div>
           </div>
 
@@ -161,7 +174,7 @@ export const PlayStoreApkModal: React.FC<PlayStoreApkModalProps> = ({ isOpen, on
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
                 <span>100% सुरक्षित</span>
               </div>
-              <p className="text-[11px] text-stone-500 mt-0.5">वेरिफाइड डिजिटल पैकेज, ऑटो सिंक।</p>
+              <p className="text-[11px] text-stone-500 mt-0.5">वेरिफाइड PWA डिजिटल पैकेज, ऑटो सिंक।</p>
             </div>
           </div>
         </div>

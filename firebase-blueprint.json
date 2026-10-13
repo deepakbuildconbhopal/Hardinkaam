@@ -302,6 +302,9 @@
         "message": { "type": "string", "description": "Notification body" },
         "type": { "type": "string", "description": "Type category (booking, payment, system)" },
         "link": { "type": "string", "description": "Optional navigation link or bookingId" },
+        "bookingId": { "type": "string", "description": "Associated booking ID" },
+        "targetRole": { "type": "string", "enum": ["customer", "pro", "franchise", "admin"], "description": "Intended recipient role" },
+        "eventType": { "type": "string", "description": "Booking lifecycle event type" },
         "read": { "type": "boolean", "description": "Whether read by user" },
         "createdAt": { "type": "string", "description": "Timestamp" }
       },
@@ -517,15 +520,21 @@
     },
     "DeviceToken": {
       "title": "DeviceToken",
-      "description": "Service professional FCM push notification device registration token",
+      "description": "FCM push notification device registration token",
       "type": "object",
       "properties": {
         "token": { "type": "string", "description": "FCM registration device token" },
-        "userId": { "type": "string", "description": "ServiceMan or User account ID" },
-        "role": { "type": "string", "description": "Account role" },
+        "userId": { "type": "string", "description": "User or ServiceMan Firebase Auth UID" },
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "role": { "type": "string", "description": "Account role (customer, pro, franchise, admin)" },
+        "device": { "type": "string", "description": "Device platform description" },
         "deviceType": { "type": "string", "description": "Device platform (web, android, ios)" },
+        "platform": { "type": "string", "description": "Runtime platform (web, pwa, android, ios)" },
+        "userAgent": { "type": "string", "description": "Browser user agent string" },
+        "isActive": { "type": "boolean", "description": "Whether device token is active" },
         "updatedAt": { "type": "string", "description": "ISO timestamp refreshed" },
-        "createdAt": { "type": "string", "description": "ISO timestamp created" }
+        "createdAt": { "type": "string", "description": "ISO timestamp created" },
+        "lastSeenAt": { "type": "string", "description": "ISO timestamp last seen" }
       },
       "required": ["token", "userId"]
     },
@@ -549,9 +558,202 @@
         "respondedAt": { "type": "string", "description": "ISO timestamp responded" }
       },
       "required": ["offerId", "bookingId", "serviceManId", "districtId", "serviceId", "status", "createdAt", "expiresAt"]
+    },
+    "RewardWallet": {
+      "title": "RewardWallet",
+      "description": "Authoritative customer reward points ledger document",
+      "type": "object",
+      "properties": {
+        "customerId": { "type": "string", "description": "Customer User UID" },
+        "pointsBalance": { "type": "number", "description": "Current active reward points balance" },
+        "availablePoints": { "type": "number", "description": "Legacy alias for points balance" },
+        "reservedPoints": { "type": "number", "description": "Reserved points held for active bookings" },
+        "totalEarned": { "type": "number", "description": "Cumulative reward points earned" },
+        "totalRedeemed": { "type": "number", "description": "Cumulative reward points redeemed" },
+        "totalReversed": { "type": "number", "description": "Cumulative reward points reversed" },
+        "totalExpired": { "type": "number", "description": "Cumulative reward points expired" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp updated" }
+      },
+      "required": ["customerId", "pointsBalance", "totalEarned", "totalRedeemed", "totalReversed"]
+    },
+    "ReferralRecord": {
+      "title": "ReferralRecord",
+      "description": "Customer referral tracking record preventing duplicate or fraudulent referrals",
+      "type": "object",
+      "properties": {
+        "referralId": { "type": "string", "description": "Unique deterministic referral identifier" },
+        "referrerCustomerId": { "type": "string", "description": "Referrer customer User UID" },
+        "referredCustomerId": { "type": "string", "description": "Referred customer User UID" },
+        "status": {
+          "type": "string",
+          "enum": ["PENDING", "QUALIFIED", "REWARDED", "REJECTED", "CANCELLED"],
+          "description": "Referral reward status"
+        },
+        "qualifyingBookingId": { "type": "string", "description": "Qualifying booking identifier" },
+        "rewardPoints": { "type": "number", "description": "Customer reward points awarded" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Update timestamp" }
+      },
+      "required": ["referralId", "referrerCustomerId", "referredCustomerId", "status", "rewardPoints", "createdAt"]
+    },
+    "LedgerEntry": {
+      "title": "LedgerEntry",
+      "description": "Hardened multilevel commission accounting ledger entry for Company, Franchise, Partner, and ServiceMan",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique deterministic ledger identifier" },
+        "ledgerOwnerId": { "type": "string", "description": "User UID or company_admin identifier" },
+        "ledgerOwnerRole": { "type": "string", "enum": ["company", "franchise", "partner", "brand_promoter", "service_man"], "description": "Attributed role" },
+        "ledgerOwnerName": { "type": "string", "description": "Name of ledger owner" },
+        "bookingId": { "type": "string", "description": "Related Booking identifier" },
+        "paymentId": { "type": "string", "description": "Related Razorpay Payment identifier" },
+        "razorpayOrderId": { "type": "string", "description": "Razorpay Order ID" },
+        "commissionType": { "type": "string", "enum": ["company_share", "franchise_commission", "partner_commission", "serviceman_earning", "tax_deduction", "reversal"], "description": "Commission categorization" },
+        "amount": { "type": "number", "description": "Ledger amount in INR" },
+        "grossBookingAmount": { "type": "number", "description": "Gross booking value in INR" },
+        "ratePercent": { "type": "number", "description": "Applied commission rate percentage" },
+        "ruleReference": { "type": "string", "description": "Rule descriptor" },
+        "type": { "type": "string", "enum": ["credit", "debit"], "description": "Credit or debit entry" },
+        "status": { "type": "string", "enum": ["cleared", "pending", "reversed"], "description": "Ledger settlement status" },
+        "description": { "type": "string", "description": "Audit description" },
+        "referenceId": { "type": "string", "description": "Unique commission batch reference" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Update timestamp" }
+      },
+      "required": ["id", "ledgerOwnerId", "ledgerOwnerRole", "bookingId", "paymentId", "commissionType", "amount", "type", "status", "referenceId"]
+    },
+    "DynamicPageLayout": {
+      "title": "DynamicPageLayout",
+      "description": "Dynamic layout, custom sections, color theme, and images for web application pages configurable by Admin",
+      "type": "object",
+      "properties": {
+        "pageId": { "type": "string", "description": "Page ID (e.g. home, bookings, wallet, franchise, profile)" },
+        "pageName": { "type": "string", "description": "Human readable page title" },
+        "customTheme": { "type": "string", "description": "JSON serialized custom color theme" },
+        "sections": { "type": "string", "description": "JSON serialized array of dynamic sections" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of last modification" },
+        "updatedBy": { "type": "string", "description": "Admin email who saved layout" }
+      },
+      "required": ["pageId", "pageName"]
+    },
+    "MarketingVisitorSession": {
+      "title": "MarketingVisitorSession",
+      "description": "Visitor session tracking city, state, country, device, referrer, and app open events",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Session record ID" },
+        "visitorId": { "type": "string", "description": "Persistent client device ID" },
+        "city": { "type": "string", "description": "Detected city name (e.g. Bhopal)" },
+        "district": { "type": "string", "description": "District or region name" },
+        "state": { "type": "string", "description": "State name (e.g. Madhya Pradesh)" },
+        "country": { "type": "string", "description": "Country (India)" },
+        "deviceType": { "type": "string", "enum": ["mobile", "tablet", "desktop"], "description": "Device category" },
+        "os": { "type": "string", "description": "Operating system (Android, iOS, Windows)" },
+        "browser": { "type": "string", "description": "Browser name" },
+        "referrer": { "type": "string", "description": "Traffic source / campaign source" },
+        "utmSource": { "type": "string", "description": "Marketing campaign UTM source" },
+        "landingPage": { "type": "string", "description": "First page visited" },
+        "ipSnippet": { "type": "string", "description": "Anonymized IP address prefix" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of visit" }
+      },
+      "required": ["id", "visitorId", "createdAt"]
+    },
+    "MarketingAdClick": {
+      "title": "MarketingAdClick",
+      "description": "User clicks on AdMob banner, AdSense, WhatsApp, or services with location tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Click record ID" },
+        "visitorId": { "type": "string", "description": "Client device ID" },
+        "eventType": { "type": "string", "enum": ["admob_banner_click", "adsense_click", "whatsapp_enquiry_click", "helpline_call_click", "service_booking_click", "franchise_click"], "description": "Type of marketing conversion event" },
+        "adUnitId": { "type": "string", "description": "AdMob Unit ID or AdSense slot" },
+        "creativeTitle": { "type": "string", "description": "Ad banner or service title clicked" },
+        "category": { "type": "string", "description": "Trade or category clicked" },
+        "city": { "type": "string", "description": "City where click occurred" },
+        "state": { "type": "string", "description": "State where click occurred" },
+        "deviceType": { "type": "string", "description": "Mobile or desktop" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of click" }
+      },
+      "required": ["id", "eventType", "createdAt"]
+    },
+    "MarketingLead": {
+      "title": "MarketingLead",
+      "description": "Marketing leads scraped or imported from Excel/Google Maps for nationwide campaigns",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Lead ID" },
+        "businessName": { "type": "string", "description": "Name of business or service provider" },
+        "trade": { "type": "string", "description": "Category / Trade" },
+        "category": { "type": "string", "description": "Category name" },
+        "contactPerson": { "type": "string", "description": "Contact person name" },
+        "phone": { "type": "string", "description": "Contact phone" },
+        "whatsapp": { "type": "string", "description": "WhatsApp contact number" },
+        "email": { "type": "string", "description": "Contact email" },
+        "city": { "type": "string", "description": "City" },
+        "state": { "type": "string", "description": "State" },
+        "pincode": { "type": "string", "description": "Postal pincode" },
+        "address": { "type": "string", "description": "Address" },
+        "rating": { "type": "number", "description": "Rating" },
+        "reviewCount": { "type": "number", "description": "Review count" },
+        "source": { "type": "string", "description": "Lead source (e.g. google_maps, excel_upload, web_search)" },
+        "status": { "type": "string", "description": "Lead status" },
+        "notes": { "type": "string", "description": "Optional notes or tags" },
+        "createdAt": { "type": "string", "description": "Created at timestamp" },
+        "updatedAt": { "type": "string", "description": "Updated at timestamp" }
+      },
+      "required": ["id", "businessName"]
+    },
+    "AIAvatarProfile": {
+      "title": "AIAvatarProfile",
+      "description": "Authorized AI Avatar digital likeness and voice clone profile for HARDINKAAM AI Ad Studio",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Avatar ID" },
+        "name": { "type": "string", "description": "Avatar display name / representative name" },
+        "roleTitle": { "type": "string", "description": "Professional title or role in ads" },
+        "gender": { "type": "string", "enum": ["female", "male", "neutral"] },
+        "referenceVideoUrl": { "type": "string", "description": "Authorized reference video URL" },
+        "previewImageUrl": { "type": "string", "description": "Generated avatar image portrait URL" },
+        "avatarVideoUrl": { "type": "string", "description": "Generated avatar speaking video URL" },
+        "speechModelStyle": { "type": "string", "description": "Default speech style" },
+        "preferredVoiceURI": { "type": "string", "description": "TTS voice actor binding" },
+        "voicePitch": { "type": "number", "description": "Default pitch" },
+        "voiceRate": { "type": "number", "description": "Default speech rate" },
+        "qualityScore": { "type": "number", "description": "Likeness quality score 0-100" },
+        "consentVerified": { "type": "boolean", "description": "Consent and right-to-use acknowledgment" },
+        "isApproved": { "type": "boolean", "description": "Admin review and approval status" },
+        "createdByAdmin": { "type": "string", "description": "Admin UID or email" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["id", "name", "previewImageUrl", "consentVerified"]
+    },
+    "AIAdStudioProject": {
+      "title": "AIAdStudioProject",
+      "description": "Multilingual AI commercial advertisement packages and projects",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Project ID" },
+        "userPrompt": { "type": "string", "description": "Initial advertising prompt" },
+        "adTitle": { "type": "string", "description": "Ad title headline" },
+        "hookLine": { "type": "string", "description": "3-second hook" },
+        "advertisingStrategy": { "type": "string", "description": "Strategy summary" },
+        "language": { "type": "string", "description": "Primary ad language" },
+        "aspectRatio": { "type": "string", "description": "9:16, 16:9, or 1:1" },
+        "totalDurationSeconds": { "type": "number", "description": "Duration in seconds" },
+        "voiceOption": { "type": "string", "description": "Voice type" },
+        "scenes": { "type": "array", "description": "Rendered storyboard scenes" },
+        "avatarConfiguration": { "type": "object", "description": "Avatar settings if included" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Update timestamp" }
+      },
+      "required": ["id", "adTitle", "scenes"]
     }
   },
   "firestore": {
+    "/ledgers/{ledgerId}": {
+      "schema": "LedgerEntry",
+      "description": "Multilevel commission ledger entries for Company, Franchise, Partner, and ServiceMan"
+    },
     "/franchise_partners/{partnerId}": {
       "schema": "FranchisePartner",
       "description": "Franchise Partner & District Administrator records"
@@ -663,6 +865,58 @@
     "/booking_offers/{offerId}": {
       "schema": "BookingOffer",
       "description": "Exclusive booking offers and alerts for eligible service professionals"
+    },
+    "/reward_wallets/{walletId}": {
+      "schema": "RewardWallet",
+      "description": "Authoritative customer reward points balance documents"
+    },
+    "/referrals/{referralId}": {
+      "schema": "ReferralRecord",
+      "description": "Customer referral records preventing duplication and fraud"
+    },
+    "/dynamic_page_layouts/{pageId}": {
+      "schema": "DynamicPageLayout",
+      "description": "Dynamic web application page configurations, custom sections, and styles controlled by Admin"
+    },
+    "/marketing_visitor_sessions/{sessionId}": {
+      "schema": "MarketingVisitorSession",
+      "description": "Visitor session records for geo-marketing analytics"
+    },
+    "/marketing_ad_clicks/{clickId}": {
+      "schema": "MarketingAdClick",
+      "description": "AdMob and marketing conversion click logs"
+    },
+    "/marketing_leads/{leadId}": {
+      "schema": "MarketingLead",
+      "description": "Marketing leads database for bulk messaging, calling, and campaign outreach"
+    },
+    "/ai_call_campaigns/{campaignId}": {
+      "schema": "AICallCampaign",
+      "description": "AI voice calling campaign definitions and parameters (Admin only)"
+    },
+    "/ai_call_queue/{queueId}": {
+      "schema": "AICallQueueItem",
+      "description": "Operational call queue entries for automated dialing (Admin only)"
+    },
+    "/ai_call_logs/{logId}": {
+      "schema": "AICallLog",
+      "description": "Comprehensive call logs, audio transcripts, sentiments, and outcome summaries (Admin only)"
+    },
+    "/ai_call_scripts/{scriptId}": {
+      "schema": "AICallScript",
+      "description": "AI calling voice scripts, FAQs, and objection rebuttal prompts (Admin only)"
+    },
+    "/ai_call_settings/{settingId}": {
+      "schema": "AICallSettings",
+      "description": "Global telephony, JioCX, and voice model configuration (Admin only)"
+    },
+    "/ai_avatars/{avatarId}": {
+      "schema": "AIAvatarProfile",
+      "description": "Approved and library AI Avatar digital likeness models for HARDINKAAM video ads (Admin only)"
+    },
+    "/ai_ad_projects/{projectId}": {
+      "schema": "AIAdStudioProject",
+      "description": "Saved AI Ad Studio campaigns, scenes, audio mix and versions (Admin only)"
     }
   }
 }

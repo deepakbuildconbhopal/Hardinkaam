@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Clock,
   CheckCircle2,
@@ -32,9 +32,20 @@ import {
   X,
   Bell,
   User,
+  FileUp,
+  Cloud,
+  Briefcase,
+  Camera,
+  UploadCloud,
+  Image as ImageIcon,
+  QrCode,
+  Banknote,
+  RotateCcw,
 } from 'lucide-react';
+import { CashPaymentModal } from '../common/CashPaymentModal';
 import { doc, updateDoc, setDoc, addDoc, collection, onSnapshot, getDoc } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { db, storage } from '../../firebase/config';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { useAuth } from '../../context/AuthContext';
 import { useNotifications } from '../../context/NotificationContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -50,12 +61,19 @@ import { MessageInterface } from '../common/MessageInterface';
 import { ChatModal } from '../customer/ChatModal';
 import { ensureBookingHasOtp, regenerateBookingOtp } from '../../services/otpService';
 import { ProArrivalVerificationCard } from './ProArrivalVerificationCard';
+import { ProBookingQrScannerModal } from './ProBookingQrScannerModal';
 import { ServicemanBookingLiveMap } from './ServicemanBookingLiveMap';
 import { WorkServiceTimer } from '../common/WorkServiceTimer';
 import { HardinkaamServiceBill } from '../common/HardinkaamServiceBill';
 import { ExtraChargesManager } from '../common/ExtraChargesManager';
 import { EndWorkModal } from './EndWorkModal';
 import { AdSenseBanner } from '../ads/AdSenseBanner';
+import {
+  notifyBookingAccepted,
+  notifyWorkStarted,
+  notifyWorkCompleted,
+  notifyCancellation,
+} from '../../services/bookingNotificationIntegrationService';
 import {
   useServicemanLiveGps,
   stopServicemanPeriodicGpsTracking,
@@ -68,6 +86,17 @@ import {
   ServicemanAlarmPersonalSettings,
   AdminGlobalAlarmSettings,
 } from '../../services/servicemanAlarmSettingsService';
+import { DashboardIdCardBanner } from '../common/DashboardIdCardBanner';
+import { ProDailyRouteMap } from './ProDailyRouteMap';
+import { ProLowNetworkBar } from './ProLowNetworkBar';
+import { SkillAcademyView } from './SkillAcademyView';
+import { proLowNetworkService } from '../../services/proLowNetworkService';
+import {
+  ProJobScheduleFilter,
+  ProJobFilterState,
+  parseTimeToMinutes,
+  getBookingDateInfo,
+} from './ProJobScheduleFilter';
 
 interface Props {
   bookings: Booking[];
@@ -85,8 +114,26 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
   const [activeChatBooking, setActiveChatBooking] = useState<Booking | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<
-    'all' | 'offers' | 'pending' | 'accepted' | 'in_progress' | 'completed' | 'cancelled'
+    'all' | 'route_map' | 'offers' | 'pending' | 'accepted' | 'in_progress' | 'completed' | 'cancelled'
   >('all');
+  // Category, Date & Schedule Prioritization filters state
+  const [scheduleFilter, setScheduleFilter] = useState<ProJobFilterState>({
+    category: 'all',
+    datePreset: 'all',
+    customDate: '',
+    searchQuery: '',
+    sortBy: 'time_asc',
+  });
+
+  const handleResetScheduleFilter = () => {
+    setScheduleFilter({
+      category: 'all',
+      datePreset: 'all',
+      customDate: '',
+      searchQuery: '',
+      sortBy: 'time_asc',
+    });
+  };
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [cancelModalBooking, setCancelModalBooking] = useState<Booking | null>(null);
   const [cancelReason, setCancelReason] = useState<string>('Technician unavailable');
@@ -94,6 +141,16 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
   const [regeneratingOtpId, setRegeneratingOtpId] = useState<string | null>(null);
   const [endWorkModalBooking, setEndWorkModalBooking] = useState<Booking | null>(null);
   const [viewBillBooking, setViewBillBooking] = useState<Booking | null>(null);
+  const [cashPaymentModalBooking, setCashPaymentModalBooking] = useState<Booking | null>(null);
+
+  // HARDINKAAM Booking QR Scanner State
+  const [isQrScannerOpen, setIsQrScannerOpen] = useState<boolean>(false);
+  const [scannerTargetBooking, setScannerTargetBooking] = useState<Booking | undefined>(undefined);
+
+  const handleOpenQrScanner = (target?: Booking) => {
+    setScannerTargetBooking(target);
+    setIsQrScannerOpen(true);
+  };
 
   // HARDINKAAM New Booking Alarm System State
   const [activeAlarmBooking, setActiveAlarmBooking] = useState<Booking | null>(null);
@@ -121,12 +178,14 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
   }, [proId]);
 
   // Filter jobs for this professional (or all demo bookings if count is low)
-  const myBookings = bookings.filter(
-    (b) =>
-      b.serviceManId === proId ||
-      b.serviceManName?.toLowerCase().includes('rajesh') ||
-      bookings.length < 5
-  );
+  const myBookings = useMemo(() => {
+    return bookings.filter(
+      (b) =>
+        b.serviceManId === proId ||
+        b.serviceManName?.toLowerCase().includes('rajesh') ||
+        bookings.length < 5
+    );
+  }, [bookings, proId]);
 
   // Load Admin Global Alarm Configuration
   useEffect(() => {
@@ -148,7 +207,6 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
     }
 
     const currentPersonalSettings = servicemanAlarmSettingsService.getPersonalSettings();
-    setAlarmSettings(currentPersonalSettings);
 
     if (!currentPersonalSettings.alarmEnabled || !adminAlarmConfig.globalAlarmEnabled) {
       if (activeAlarmBooking) {
@@ -186,7 +244,6 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
       if (
         liveBooking &&
         (liveBooking.status !== 'pending' ||
-          liveBooking.status === 'cancelled' ||
           (liveBooking.serviceManId &&
             liveBooking.serviceManId !== proId &&
             !liveBooking.serviceManName?.toLowerCase().includes('rajesh')))
@@ -641,6 +698,7 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
     activeBookingId: trackingBookingId,
     permission: gpsPermission,
     requestPermissionNow,
+    lastCoords,
   } = useServicemanLiveGps(myBookings, proId);
 
   // Automatically ensure OTP is initialized for any in_progress jobs
@@ -684,14 +742,110 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
     0
   );
 
-  const displayedJobs = myBookings.filter((b) => {
-    if (statusFilter === 'pending') return b.status === 'pending';
-    if (statusFilter === 'accepted') return b.status === 'accepted' || b.status === 'on_the_way';
-    if (statusFilter === 'in_progress') return b.status === 'in_progress';
-    if (statusFilter === 'completed') return b.status === 'completed';
-    if (statusFilter === 'cancelled') return b.status === 'cancelled' || b.status === 'rejected';
-    return true;
-  });
+  const displayedJobs = useMemo(() => {
+    // 1. Filter by Lifecycle status tab
+    let filtered = myBookings.filter((b) => {
+      if (statusFilter === 'pending') return b.status === 'pending';
+      if (statusFilter === 'accepted') return b.status === 'accepted' || b.status === 'on_the_way';
+      if (statusFilter === 'in_progress') return b.status === 'in_progress';
+      if (statusFilter === 'completed') return b.status === 'completed';
+      if (statusFilter === 'cancelled') return b.status === 'cancelled' || b.status === 'rejected';
+      return true;
+    });
+
+    // 2. Filter by Category
+    if (scheduleFilter.category !== 'all') {
+      const target = scheduleFilter.category.toLowerCase().trim();
+      filtered = filtered.filter((b) => {
+        const catName = (b.categoryName || '').toLowerCase();
+        const catId = (b.categoryId || '').toLowerCase();
+        const servName = (b.serviceName || '').toLowerCase();
+        return (
+          catId === target ||
+          catName === target ||
+          catName.replace(/\s+/g, '_') === target ||
+          servName.includes(target)
+        );
+      });
+    }
+
+    // 3. Filter by Date (Today, Tomorrow, Upcoming, Custom)
+    if (scheduleFilter.datePreset !== 'all') {
+      filtered = filtered.filter((b) => {
+        const info = getBookingDateInfo(b);
+        if (scheduleFilter.datePreset === 'today') return info.isToday;
+        if (scheduleFilter.datePreset === 'tomorrow') return info.isTomorrow;
+        if (scheduleFilter.datePreset === 'upcoming') return info.isUpcoming;
+        if (scheduleFilter.datePreset === 'custom') {
+          if (!scheduleFilter.customDate) return true;
+          return info.isoDate === scheduleFilter.customDate || info.rawDate.includes(scheduleFilter.customDate);
+        }
+        return true;
+      });
+    }
+
+    // 4. Search Filter (Customer name, phone, address, service, or booking ID)
+    if (scheduleFilter.searchQuery.trim()) {
+      const q = scheduleFilter.searchQuery.toLowerCase().trim();
+      filtered = filtered.filter((b) => {
+        return (
+          b.customerName?.toLowerCase().includes(q) ||
+          b.customerPhone?.includes(q) ||
+          b.address?.toLowerCase().includes(q) ||
+          b.serviceName?.toLowerCase().includes(q) ||
+          b.categoryName?.toLowerCase().includes(q) ||
+          b.id?.toLowerCase().includes(q)
+        );
+      });
+    }
+
+    // 5. Schedule Prioritization & Sorting
+    const sorted = [...filtered].sort((a, b) => {
+      if (scheduleFilter.sortBy === 'time_asc') {
+        const urgencyWeight = (st: string) => {
+          if (st === 'in_progress') return 1;
+          if (st === 'on_the_way' || st === 'arrived') return 2;
+          if (st === 'accepted') return 3;
+          if (st === 'pending') return 4;
+          return 5;
+        };
+        const uDiff = urgencyWeight(a.status) - urgencyWeight(b.status);
+        if (uDiff !== 0) return uDiff;
+        return parseTimeToMinutes(a.scheduledTime) - parseTimeToMinutes(b.scheduledTime);
+      }
+
+      if (scheduleFilter.sortBy === 'time_desc') {
+        return parseTimeToMinutes(b.scheduledTime) - parseTimeToMinutes(a.scheduledTime);
+      }
+
+      if (scheduleFilter.sortBy === 'urgency') {
+        const urgencyWeight = (st: string) => {
+          if (st === 'in_progress') return 1;
+          if (st === 'on_the_way') return 2;
+          if (st === 'arrived') return 3;
+          if (st === 'accepted') return 4;
+          if (st === 'pending') return 5;
+          if (st === 'completed') return 6;
+          return 7;
+        };
+        return urgencyWeight(a.status) - urgencyWeight(b.status);
+      }
+
+      if (scheduleFilter.sortBy === 'earnings_desc') {
+        return (b.amount || 0) - (a.amount || 0);
+      }
+
+      if (scheduleFilter.sortBy === 'date_asc') {
+        const dateA = getBookingDateInfo(a).isoDate || '9999-99-99';
+        const dateB = getBookingDateInfo(b).isoDate || '9999-99-99';
+        return dateA.localeCompare(dateB);
+      }
+
+      return 0;
+    });
+
+    return sorted;
+  }, [myBookings, statusFilter, scheduleFilter]);
 
   // State machine transition handler
   const handleStatusTransition = async (
@@ -712,47 +866,22 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
         stopServicemanPeriodicGpsTracking(booking.id);
       }
 
-      // Send Customer Notifications
-      if (booking.customerId) {
-        if (newStatus === 'accepted') {
-          await sendNotification({
-            userId: booking.customerId,
-            title: 'Booking Accepted! 🛠️',
-            message: `${
-              userProfile?.name || booking.serviceManName || 'Technician'
-            } accepted booking #${booking.id} (${booking.serviceName}). Scheduled for ${
-              booking.scheduledDate
-            }.`,
-            type: 'booking',
-            link: booking.id,
-          });
-        } else if (newStatus === 'in_progress') {
-          await sendNotification({
-            userId: booking.customerId,
-            title: 'Technician Started Service ⚡',
-            message: `Work on #${booking.id} (${booking.serviceName}) has started on-site.`,
-            type: 'booking',
-            link: booking.id,
-          });
-        } else if (newStatus === 'completed') {
-          await sendNotification({
-            userId: booking.customerId,
-            title: 'Service Completed! ⭐',
-            message: `Your service #${booking.id} has been marked complete. Please rate your experience!`,
-            type: 'booking',
-            link: booking.id,
-          });
-        } else if (newStatus === 'cancelled') {
-          await sendNotification({
-            userId: booking.customerId,
-            title: 'Booking Cancelled',
-            message: `Booking #${booking.id} was cancelled by technician. Reason: ${
-              reason || cancelReason
-            }`,
-            type: 'booking',
-            link: booking.id,
-          });
-        }
+      // Send Deduplicated Notifications
+      if (newStatus === 'accepted') {
+        await notifyBookingAccepted(
+          booking,
+          userProfile?.name || booking.serviceManName || 'Technician'
+        );
+      } else if (newStatus === 'in_progress') {
+        await notifyWorkStarted(booking);
+      } else if (newStatus === 'completed') {
+        await notifyWorkCompleted(booking, booking.finalAmount || booking.amount);
+      } else if (newStatus === 'cancelled') {
+        await notifyCancellation(
+          booking,
+          'service_man',
+          reason || cancelReason || 'Cancelled by Service Professional'
+        );
       }
 
       setCancelModalBooking(null);
@@ -763,8 +892,21 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
     }
   };
 
+  // Auto-cache assigned upcoming jobs in IndexedDB for low-network reliability
+  useEffect(() => {
+    myBookings.forEach((b) => {
+      proLowNetworkService.cacheAssignedJob(b).catch(() => {});
+    });
+  }, [myBookings]);
+
   return (
     <div className="space-y-6 pb-20">
+      {/* Official Digital Technician ID Card Banner */}
+      <DashboardIdCardBanner />
+
+      {/* Low-Network Mode Status Bar & Offline Jobs Drawer */}
+      <ProLowNetworkBar />
+
       {/* Festive Greeting Banner for Service Pro */}
       {effectiveTheme.category === 'festival' && (
         <div
@@ -789,15 +931,23 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
       {/* Header with Real-time Active / Busy Toggle Switch */}
       <div className="bg-white rounded-3xl border border-stone-200 p-5 sm:p-6 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-5">
         <div className="flex items-center gap-4">
-          <div
-            className="w-14 h-14 rounded-2xl flex items-center justify-center font-black text-xl transition-colors shrink-0 shadow-xs"
-            style={{
-              backgroundColor: effectiveTheme.colors.primaryLight,
-              color: effectiveTheme.colors.primaryDark,
-            }}
-          >
-            {userProfile?.name?.charAt(0) || 'R'}
-          </div>
+          {userProfile?.avatar || currentUser?.photoURL ? (
+            <img
+              src={userProfile?.avatar || currentUser?.photoURL || ''}
+              alt={userProfile?.name || 'Technician'}
+              className="w-16 h-16 rounded-2xl object-cover border-2 border-orange-500 shadow-md shrink-0"
+            />
+          ) : (
+            <div
+              className="w-16 h-16 rounded-2xl flex items-center justify-center font-black text-2xl transition-colors shrink-0 shadow-xs"
+              style={{
+                backgroundColor: effectiveTheme.colors.primaryLight,
+                color: effectiveTheme.colors.primaryDark,
+              }}
+            >
+              {userProfile?.name?.charAt(0) || 'R'}
+            </div>
+          )}
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-lg sm:text-xl font-bold text-stone-900">
@@ -806,6 +956,13 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
               <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold text-[10px] flex items-center gap-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-blue-600" /> KYC VERIFIED PRO
               </span>
+              <button
+                type="button"
+                onClick={onOpenWallet}
+                className="px-2.5 py-0.5 rounded-full bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-bold text-[10px] flex items-center gap-1 border border-emerald-300 transition cursor-pointer"
+              >
+                <span>👛 वॉलेट व कमाई</span>
+              </button>
               <span
                 className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold flex items-center gap-1.5 transition-all ${
                   isAvailable
@@ -888,6 +1045,36 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
             }`}
           >
             <Power className="w-4 h-4" />
+          </button>
+
+          {/* Instant QR Code Scanner Quick Action */}
+          <button
+            id="pro-scan-qr-quick-btn"
+            type="button"
+            onClick={() => handleOpenQrScanner()}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-black text-xs transition-all shadow-xs cursor-pointer"
+            title="Scan customer booking QR code to start service"
+          >
+            <QrCode className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Scan Customer QR</span>
+            <span className="sm:hidden">Scan QR</span>
+          </button>
+
+          {/* Daily Job Route Map & Optimizer Quick Action */}
+          <button
+            id="pro-route-map-quick-btn"
+            type="button"
+            onClick={() => setStatusFilter('route_map')}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs transition-all shadow-xs cursor-pointer ${
+              statusFilter === 'route_map'
+                ? 'bg-indigo-600 text-white ring-2 ring-indigo-400'
+                : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200'
+            }`}
+            title="दैनिक यात्रा मार्ग व मैप - आज के असाइन्ड काम और रूट ऑप्टिमाइज़र (Google Maps)"
+          >
+            <Navigation className="w-3.5 h-3.5 text-indigo-600" />
+            <span className="hidden sm:inline">Daily Route Map</span>
+            <span className="sm:hidden">रूट मैप</span>
           </button>
 
           {/* New Booking Alarm Settings Quick Action */}
@@ -1024,6 +1211,7 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
         {[
           { key: 'all', label: `All Jobs (${myBookings.length})` },
+          { key: 'route_map', label: `🗺️ Daily Route Map` },
           { key: 'offers', label: `Offers (${proOffers.filter((o) => o.status === 'PENDING').length})` },
           { key: 'pending', label: `Pending (${myBookings.filter((b) => b.status === 'pending').length})` },
           { key: 'accepted', label: `Accepted (${myBookings.filter((b) => b.status === 'accepted' || b.status === 'on_the_way').length})` },
@@ -1046,8 +1234,28 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
         ))}
       </div>
 
-      {/* Offers Tab Rendering */}
-      {statusFilter === 'offers' ? (
+      {/* Route Map Tab Rendering */}
+      {statusFilter === 'route_map' ? (
+        <div className="space-y-4">
+          <ProDailyRouteMap
+            bookings={myBookings}
+            servicemanLocation={lastCoords || undefined}
+            onStatusTransition={async (booking, newStatus) => {
+              await handleStatusTransition(booking, newStatus as any);
+            }}
+            onSelectBooking={(booking) => {
+              setExpandedJobId(booking.id);
+              setStatusFilter('all');
+              setTimeout(() => {
+                const el = document.getElementById(`pro-job-${booking.id}`);
+                if (el) {
+                  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+              }, 120);
+            }}
+          />
+        </div>
+      ) : statusFilter === 'offers' ? (
         <div className="space-y-4">
           {proOffers.length === 0 ? (
             <div className="bg-white rounded-3xl border border-stone-200 p-8 text-center">
@@ -1179,14 +1387,62 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
       ) : (
         /* Jobs List Section */
         <div className="space-y-4">
+          {/* Schedule Prioritization: Category, Date & Search Filters */}
+          <ProJobScheduleFilter
+            allJobs={myBookings}
+            filteredCount={displayedJobs.length}
+            filterState={scheduleFilter}
+            onFilterChange={setScheduleFilter}
+            onResetFilters={handleResetScheduleFilter}
+          />
+
+          {/* Quick Arrival QR Verification Action Banner */}
+          {myBookings.some((j) => ['accepted', 'on_the_way', 'arriving', 'arrived', 'otp_pending'].includes(j.status)) && (
+            <div className="p-4 rounded-3xl bg-gradient-to-r from-orange-500/10 via-amber-500/10 to-orange-500/5 border border-orange-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-orange-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <QrCode className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs sm:text-sm font-black text-stone-900 flex items-center gap-2">
+                    <span>Arrived at Customer Location?</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-900 border border-orange-200">
+                      Instant Start
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-stone-600 mt-0.5">
+                    Scan customer's booking QR code on their screen to instantly verify and initiate service.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleOpenQrScanner()}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-orange-600 hover:bg-orange-700 text-white font-extrabold text-xs transition shadow-xs flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>Open QR Scanner</span>
+              </button>
+            </div>
+          )}
+
         {displayedJobs.length === 0 ? (
-          <div className="bg-white rounded-3xl border border-stone-200 p-8 text-center">
-            <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-2" />
-            <h3 className="text-sm font-bold text-stone-800">No jobs in this filter</h3>
-            <p className="text-xs text-stone-400 mt-1">
-              Check other status tabs or keep duty status "Online" to receive incoming customer
-              bookings.
+          <div className="bg-white rounded-3xl border border-stone-200 p-8 text-center space-y-3">
+            <CheckCircle2 className="w-10 h-10 text-orange-500 mx-auto mb-1" />
+            <h3 className="text-sm font-bold text-stone-800">No jobs match your selected filters</h3>
+            <p className="text-xs text-stone-400 max-w-md mx-auto">
+              No assigned bookings found for the selected category, date, or search criteria.
             </p>
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={handleResetScheduleFilter}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset Filters & Show All</span>
+              </button>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">
@@ -1205,16 +1461,37 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
                   {/* Job Header */}
                   <div className="p-4 sm:p-5 bg-stone-50/80 border-b border-stone-200 flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs font-bold text-stone-500">#{job.id}</span>
                         <span className="text-stone-300">•</span>
                         <h3 className="text-sm sm:text-base font-extrabold text-stone-900">
                           {job.serviceName}
                         </h3>
+                        {job.categoryName && (
+                          <span className="px-2 py-0.5 rounded-lg bg-orange-100 text-orange-900 text-[10px] font-extrabold border border-orange-200 flex items-center gap-1">
+                            <span>🏷️</span>
+                            <span>{job.categoryName}</span>
+                          </span>
+                        )}
                       </div>
-                      <p className="text-xs text-stone-500 mt-0.5">
-                        Scheduled: <strong>{job.scheduledDate}</strong> ({job.scheduledTime})
-                      </p>
+                      <div className="flex items-center gap-2 flex-wrap text-xs text-stone-500 mt-1">
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5 text-stone-400" />
+                          <span>
+                            Scheduled: <strong>{job.scheduledDate || 'Today'}</strong>
+                          </span>
+                        </span>
+                        <span className="text-stone-300">•</span>
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5 text-stone-400" />
+                          <span>{job.scheduledTime || 'Flexible Time'}</span>
+                        </span>
+                        {getBookingDateInfo(job).isToday && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            Today's Shift
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -1371,6 +1648,18 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
                           <MessageSquare className="w-3.5 h-3.5" />
                           Live Chat
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStatusFilter('route_map');
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          className="py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-indigo-200"
+                          title="दैनिक रूट मैप में देखें (View on Route Map)"
+                        >
+                          <Navigation className="w-3.5 h-3.5 text-indigo-600" />
+                          <span className="hidden sm:inline">Route Map</span>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1409,6 +1698,9 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
                     <div className="mx-4 sm:mx-5 mb-4">
                       <ProArrivalVerificationCard
                         booking={job}
+                        currentUserId={proId}
+                        onOpenChat={(b) => setActiveChatBooking(b)}
+                        onOpenQrScanner={(b) => handleOpenQrScanner(b)}
                         onStatusUpdated={() => {
                           // Real-time Firestore listener auto-syncs state
                         }}
@@ -1542,10 +1834,16 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
 
                       {/* State: Accepted / On The Way / Arriving / Arrived */}
                       {(job.status === 'accepted' || job.status === 'on_the_way' || job.status === 'arriving' || job.status === 'arrived' || job.status === 'otp_pending') && (
-                        <>
-                          <span className="text-[11px] font-semibold text-orange-700 bg-orange-50 px-2.5 py-1 rounded-lg border border-orange-200">
-                            Use Arrival Verification Card above to verify OTP and start
-                          </span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenQrScanner(job)}
+                            className="px-4 py-2 rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white text-xs font-black flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                            title="Scan customer booking QR code to initiate service"
+                          >
+                            <QrCode className="w-4 h-4" />
+                            <span>Scan Customer QR (Start)</span>
+                          </button>
                           <button
                             type="button"
                             onClick={() => setCancelModalBooking(job)}
@@ -1553,7 +1851,7 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
                           >
                             Cancel
                           </button>
-                        </>
+                        </div>
                       )}
 
                       {/* State: In Progress */}
@@ -1576,8 +1874,8 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
 
                       {/* State: Completed */}
                       {job.status === 'completed' && (
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200 flex items-center gap-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1.5 rounded-xl border border-emerald-200 flex items-center gap-1">
                             <CheckCircle2 className="w-3.5 h-3.5" /> Service Completed
                           </span>
                           <button
@@ -1588,6 +1886,25 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
                             <Receipt className="w-3.5 h-3.5 text-amber-400" />
                             <span>HARDINKAAM Bill</span>
                           </button>
+                          {job.paymentStatus === 'paid' ? (
+                            <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1.5 rounded-xl border border-emerald-200 flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Paid ✓
+                            </span>
+                          ) : job.cashPaymentStatus === 'pending_approval' ? (
+                            <span className="text-xs font-bold text-amber-800 bg-amber-50 px-2.5 py-1.5 rounded-xl border border-amber-300 flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5 text-amber-600 animate-spin" /> नकद सत्यापन लंबित
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setCashPaymentModalBooking(job)}
+                              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                              title="ग्राहक से प्राप्त नकद राशि रिपोर्ट करें"
+                            >
+                              <Banknote className="w-3.5 h-3.5" />
+                              <span>कैश प्राप्त हुआ (Report Cash)</span>
+                            </button>
+                          )}
                         </div>
                       )}
 
@@ -1714,6 +2031,43 @@ export const ProDashboard: React.FC<Props> = ({ bookings, onOpenKYC, onOpenWalle
           setAlarmSettings(servicemanAlarmSettingsService.getPersonalSettings());
         }}
         onSimulateTestBooking={handleSimulateTestBooking}
+      />
+
+      {/* HARDINKAAM Booking QR Code Scanner Modal */}
+      <ProBookingQrScannerModal
+        isOpen={isQrScannerOpen}
+        onClose={() => {
+          setIsQrScannerOpen(false);
+          setScannerTargetBooking(undefined);
+        }}
+        targetBooking={scannerTargetBooking}
+        activeJobs={myBookings.filter((b) =>
+          ['accepted', 'on_the_way', 'arriving', 'arrived', 'otp_pending'].includes(b.status)
+        )}
+        serviceManId={proId}
+        onVerified={(verifiedBookingId) => {
+          sendNotification({
+            type: 'success',
+            title: 'Service Initiated ✓',
+            message: `Booking #${verifiedBookingId.slice(-6).toUpperCase()} is now In Progress! Work timer started.`,
+          });
+          setStatusFilter('in_progress');
+        }}
+      />
+
+      {/* Cash Payment Modal */}
+      <CashPaymentModal
+        booking={cashPaymentModalBooking}
+        isOpen={!!cashPaymentModalBooking}
+        onClose={() => setCashPaymentModalBooking(null)}
+        callerRole="SERVICE_PRO"
+        onSuccess={() => {
+          sendNotification({
+            type: 'success',
+            title: 'Cash Payment Recorded ✓',
+            message: 'सुपर एडमिन (Deepak Buildcon) को नकद भुगतान सत्यापन अनुरोध भेज दिया गया है।',
+          });
+        }}
       />
     </div>
   );

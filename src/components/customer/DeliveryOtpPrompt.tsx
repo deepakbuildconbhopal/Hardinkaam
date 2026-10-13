@@ -127,7 +127,7 @@ export const DeliveryOtpPrompt: React.FC<DeliveryOtpPromptProps> = ({
       if (!result.success) {
         setErrorMessage(result.message);
         addToast({
-          type: 'alert',
+          type: 'warning',
           title: 'Verification Failed',
           description: result.message,
           bookingId: booking.id,
@@ -237,7 +237,9 @@ export const DeliveryOtpPrompt: React.FC<DeliveryOtpPromptProps> = ({
           {digits.map((digit, idx) => (
             <input
               key={idx}
-              ref={(el) => (inputRefs.current[idx] = el)}
+              ref={(el) => {
+                inputRefs.current[idx] = el;
+              }}
               type="text"
               inputMode="numeric"
               pattern="[0-9]*"

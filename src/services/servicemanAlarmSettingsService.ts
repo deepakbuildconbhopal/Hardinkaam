@@ -26,11 +26,25 @@ export interface ServicemanAlarmPersonalSettings {
 export interface AdminGlobalAlarmSettings {
   globalAlarmEnabled: boolean;
   countdownDurationSeconds: number; // e.g. 60s
+  maxAlertAttempts: number; // e.g. 3 attempts
   selectedAlarmTone: AlarmToneType;
+  alarmVolumeDefault: number; // 0.1 to 1.0 (default 0.85)
+  alarmSoundLoop: boolean;
+  vibrationDefault: boolean;
+  vibrationPattern: 'standard' | 'heavy' | 'pulse';
   notificationTitle: string;
   notificationSubtitle: string;
+  defaultNotificationBody?: string;
   strictEligibility: boolean;
+  requireKycVerified?: boolean;
+  requireActiveGps?: boolean;
+  minRatingThreshold?: number; // 0, 3.5, 4.0, 4.5
+  maxActiveJobsCap?: number; // e.g. 1, 2, 3
   autoReassignOnExpiry: boolean;
+  enabledDistricts?: string[]; // e.g. ['all'] or array of district IDs
+  eligibleCategories?: string[]; // e.g. ['all'] or array of category IDs
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 export const ANDROID_NOTIFICATION_CHANNEL = {
@@ -55,11 +69,23 @@ export const DEFAULT_PRO_SETTINGS: ServicemanAlarmPersonalSettings = {
 export const DEFAULT_ADMIN_SETTINGS: AdminGlobalAlarmSettings = {
   globalAlarmEnabled: true,
   countdownDurationSeconds: 60,
+  maxAlertAttempts: 3,
   selectedAlarmTone: 'harmonic_bells',
+  alarmVolumeDefault: 0.85,
+  alarmSoundLoop: true,
+  vibrationDefault: true,
+  vibrationPattern: 'standard',
   notificationTitle: '🔔 नया काम आया है!',
   notificationSubtitle: 'New Service Request Received',
+  defaultNotificationBody: 'आपके क्षेत्र में नई बुकिंग प्राप्त हुई है। विवरण देखें और तुरंत स्वीकार करें।',
   strictEligibility: true,
+  requireKycVerified: true,
+  requireActiveGps: false,
+  minRatingThreshold: 0,
+  maxActiveJobsCap: 2,
   autoReassignOnExpiry: true,
+  enabledDistricts: ['all'],
+  eligibleCategories: ['all'],
 };
 
 class ServicemanAlarmSettingsService {
@@ -411,7 +437,19 @@ class ServicemanAlarmSettingsService {
       const title = this.adminSettings.notificationTitle || '🔔 नया काम आया है! - New Service Request';
       const proShare = Math.round(amount * 0.85);
       const distInfo = approxDistance ? `\n🚗 दूरी: ${approxDistance}` : '';
-      const body = `सेवा: ${serviceName}\n📍 स्थान: ${locality || 'Bhopal'}${distInfo}\n💰 अनुमानित आय: ₹${proShare}\n⏱️ तुरंत स्वीकार करें (Action Required)`;
+      const customBodyPrefix = this.adminSettings.defaultNotificationBody ? `${this.adminSettings.defaultNotificationBody}\n` : '';
+      const body = `${customBodyPrefix}सेवा: ${serviceName}\n📍 स्थान: ${locality || 'Bhopal'}${distInfo}\n💰 अनुमानित आय: ₹${proShare}\n⏱️ तुरंत स्वीकार करें (Action Required)`;
+
+      let vibrateArr: number[] = [];
+      if (this.adminSettings.vibrationDefault !== false) {
+        if (this.adminSettings.vibrationPattern === 'heavy') {
+          vibrateArr = [800, 200, 800, 200, 800];
+        } else if (this.adminSettings.vibrationPattern === 'pulse') {
+          vibrateArr = [200, 100, 200, 100, 200, 100, 200];
+        } else {
+          vibrateArr = [500, 250, 500, 250, 500];
+        }
+      }
 
       const options: any = {
         body,
@@ -421,7 +459,7 @@ class ServicemanAlarmSettingsService {
         renotify: true,
         requireInteraction: true,
         silent: false,
-        vibrate: [500, 250, 500, 250, 500],
+        vibrate: vibrateArr,
         data: {
           bookingId,
           url: '/#serviceman',

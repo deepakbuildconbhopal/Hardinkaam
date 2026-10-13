@@ -16,10 +16,12 @@ service firebase.storage {
 
     function isSuperAdmin() {
       return isSignedIn() && (
+        ('role' in request.auth.token && (request.auth.token.role == 'admin' || request.auth.token.role == 'super_admin')) ||
+        ('isSuperAdmin' in request.auth.token && request.auth.token.isSuperAdmin == true) ||
+        ('isAdmin' in request.auth.token && request.auth.token.isAdmin == true) ||
         request.auth.token.email == 'deepakbuildconbhopal@gmail.com' ||
         request.auth.token.email == 'admin@hardinkaam.in' ||
-        request.auth.token.email == 'admin@deepakbuildcon.com' ||
-        request.auth.token.email == 'superadmin@hardinkaam.in'
+        request.auth.token.email == 'admin_deepak@hardinkaam.in'
       );
     }
 
@@ -126,6 +128,24 @@ service firebase.storage {
     }
 
     // =========================================================================
+    // 4B. COLOSSAL WORK SHOWCASE PROJECT PHOTOS (FIREBASE STORAGE BUCKET)
+    // Showcase photos uploaded by users, customers, and professionals
+    // Publicly readable for the Colossal Work Showcase gallery.
+    // Supports uploads up to 15MB images (JPG, PNG, WebP).
+    // =========================================================================
+    match /showcase/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isAllowedImageType() &&
+                     request.resource.size <= 15 * 1024 * 1024;
+    }
+
+    match /showcase_uploads/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isAllowedImageType() &&
+                     request.resource.size <= 15 * 1024 * 1024;
+    }
+
+    // =========================================================================
     // 5. PUBLIC ASSETS & CATALOG IMAGES
     // Category images, service images, public banners, logos, PWA assets
     // Publicly readable for web clients. Super Admin write only.
@@ -175,20 +195,66 @@ service firebase.storage {
     // =========================================================================
     // 6. BOOKING ATTACHMENTS & CHAT MEDIA
     // Photos & service completion snapshots
-    // Accessible only to authenticated users. Size limit: 10MB
+    // Accessible only to authorized booking/chat participants or Super Admin. Size limit: 10MB
     // =========================================================================
     match /bookings/{bookingId}/{fileName} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn() &&
-                     (isAllowedImageType() || isAllowedDocumentType()) &&
-                     request.resource.size <= 10 * 1024 * 1024;
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          firestore.exists(/databases/(default)/documents/bookings/$(bookingId)) &&
+          (
+            firestore.get(/databases/(default)/documents/bookings/$(bookingId)).data.customerId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(bookingId)).data.serviceManId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(bookingId)).data.userId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(bookingId)).data.partnerId == request.auth.uid
+          )
+        )
+      );
+      allow write: if isSignedIn() && (
+        isSuperAdmin() ||
+        (
+          firestore.exists(/databases/(default)/documents/bookings/$(bookingId)) &&
+          (
+            firestore.get(/databases/(default)/documents/bookings/$(bookingId)).data.customerId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(bookingId)).data.serviceManId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(bookingId)).data.userId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(bookingId)).data.partnerId == request.auth.uid
+          )
+        )
+      ) &&
+      (isAllowedImageType() || isAllowedDocumentType()) &&
+      request.resource.size <= 10 * 1024 * 1024;
     }
 
     match /messages/{conversationId}/{fileName} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn() &&
-                     isAllowedImageType() &&
-                     request.resource.size <= 5 * 1024 * 1024;
+      allow read: if isSignedIn() && (
+        isSuperAdmin() ||
+        conversationId.matches('.*' + request.auth.uid + '.*') ||
+        (
+          firestore.exists(/databases/(default)/documents/bookings/$(conversationId)) &&
+          (
+            firestore.get(/databases/(default)/documents/bookings/$(conversationId)).data.customerId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(conversationId)).data.serviceManId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(conversationId)).data.userId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(conversationId)).data.partnerId == request.auth.uid
+          )
+        )
+      );
+      allow write: if isSignedIn() && (
+        isSuperAdmin() ||
+        conversationId.matches('.*' + request.auth.uid + '.*') ||
+        (
+          firestore.exists(/databases/(default)/documents/bookings/$(conversationId)) &&
+          (
+            firestore.get(/databases/(default)/documents/bookings/$(conversationId)).data.customerId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(conversationId)).data.serviceManId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(conversationId)).data.userId == request.auth.uid ||
+            firestore.get(/databases/(default)/documents/bookings/$(conversationId)).data.partnerId == request.auth.uid
+          )
+        )
+      ) &&
+      isAllowedImageType() &&
+      request.resource.size <= 5 * 1024 * 1024;
     }
   }
 }

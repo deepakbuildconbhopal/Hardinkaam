@@ -10,6 +10,8 @@ import {
   limit,
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../utils/sparkQuotaGuard';
+import { Booking } from '../types';
 
 export type AdminAlertCategory =
   | 'agreement'
@@ -439,8 +441,12 @@ export async function notifyAdminPartnerMilestoneReached(params: {
 export function subscribeAdminAlerts(
   callback: (alerts: AdminRealtimeAlert[]) => void
 ): () => void {
+  if (isResourceExhausted()) {
+    return () => {};
+  }
+
   try {
-    const alertsQuery = query(collection(db, 'admin_alerts'), limit(100));
+    const alertsQuery = query(collection(db, 'admin_alerts'), limit(50));
 
     const unsubscribe = onSnapshot(
       alertsQuery,
@@ -461,12 +467,14 @@ export function subscribeAdminAlerts(
       },
       (error) => {
         console.warn('Admin alerts live subscription notice:', error);
+        checkAndHandleQuotaError(error);
       }
     );
 
     return unsubscribe;
   } catch (err) {
     console.warn('Failed to subscribe to admin alerts:', err);
+    checkAndHandleQuotaError(err);
     return () => {};
   }
 }
@@ -511,12 +519,125 @@ export async function deleteAdminAlert(alertId: string): Promise<void> {
 }
 
 /**
+ * Real-time Admin Alert & WhatsApp Notification when ANY New Booking is created
+ */
+export async function notifyAdminNewBookingAndWhatsApp(booking: Booking): Promise<string> {
+  const bookingId = booking.id;
+  const customerName = booking.customerName || 'Customer';
+  const customerPhone = booking.customerPhone || 'N/A';
+  const serviceName = booking.serviceName || 'Home Service';
+  const scheduledDate = booking.scheduledDate || 'Today';
+  const scheduledTime = booking.scheduledTime || 'Slot';
+  const address = booking.address || 'Bhopal, MP';
+  const amount = booking.amount || booking.estimatedCharge || 299;
+  const otp = booking.otp || '5482';
+  const nowIso = new Date().toISOString();
+
+  const title = `🚨 नई बुकिंग आई है! (#${bookingId})`;
+  const message = `ग्राहक: ${customerName} (${customerPhone}), सेवा: ${serviceName}, दिनांक: ${scheduledDate} (${scheduledTime}), पता: ${address}, राशि: ₹${amount}`;
+
+  // 1. Create real-time Admin Alert document in 'admin_alerts'
+  const alertId = await createAdminAlert({
+    title,
+    message,
+    category: 'operational',
+    milestoneType: 'TARGET_BOOKINGS_REACHED',
+    partnerId: booking.partnerId || 'main_admin',
+    partnerName: 'HARDINKAAM Central Operations',
+    districtId: booking.districtId || 'mp_bhopal_dist',
+    districtName: booking.districtName || 'Bhopal',
+    franchiseCode: 'HDK-ADMIN',
+    priority: 'critical',
+    actionTab: 'admin_bookings',
+    metadata: {
+      bookingId,
+      customerName,
+      customerPhone,
+      serviceName,
+      scheduledDate,
+      scheduledTime,
+      amount,
+      otp,
+      createdAt: nowIso,
+    },
+  });
+
+  playAdminChime('critical');
+
+  // 2. Format comprehensive WhatsApp Message for Admin
+  const whatsappText = `🚨 *HARDINKAAM - NAYI BOOKING AAYI HAI!* 🚨
+
+📋 *Booking ID:* #${bookingId}
+👤 *Customer:* ${customerName}
+📞 *Mobile:* ${customerPhone}
+🛠️ *Service:* ${serviceName}
+📅 *Scheduled:* ${scheduledDate} (${scheduledTime})
+📍 *Address:* ${address}
+💰 *Total Amount:* ₹${amount} (COD/UPI)
+🔒 *Arrival OTP:* ${otp}
+⏰ *Booked At:* ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
+
+🔗 *Admin Dashboard:* https://www.hardinkaam.online/admin/bookings`;
+
+  const adminPhones = ['916267546945'];
+
+  // 3. Save to 'whatsapp_logs' collection in Firestore
+  for (const phone of adminPhones) {
+    try {
+      const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(whatsappText)}`;
+      const logId = `wa_admin_${bookingId}_${phone}`;
+      await setDoc(doc(db, 'whatsapp_logs', logId), {
+        id: logId,
+        recipientPhone: phone,
+        recipientName: 'HARDINKAAM Master Admin',
+        type: 'admin_new_booking_whatsapp',
+        bookingId,
+        messageBody: whatsappText,
+        whatsappUrl: waUrl,
+        status: 'sent',
+        createdAt: nowIso,
+      }, { merge: true });
+    } catch (waErr) {
+      console.warn('Admin WhatsApp log notice:', waErr);
+    }
+  }
+
+  // 4. Trigger backend server route for immediate delivery
+  try {
+    fetch('/api/notifications/whatsapp-admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bookingId,
+        booking,
+        whatsappText,
+        adminPhones,
+      }),
+    }).catch(() => {});
+  } catch (e) {
+    // Non-fatal background fetch
+  }
+
+  return alertId;
+}
+
+/**
  * Seed initial administrative alerts if collection is newly mounted
  */
 export async function seedInitialAdminAlertsIfEmpty(): Promise<void> {
+  if (isResourceExhausted()) return;
+
+  const seedKey = 'hdk_admin_alerts_seed_checked_v1';
+  if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(seedKey)) {
+    return;
+  }
+
   try {
-    const snap = await getDocs(query(collection(db, 'admin_alerts'), limit(3)));
-    if (!snap.empty) return;
+    const snap = await getDocs(query(collection(db, 'admin_alerts'), limit(1)));
+    if (!snap.empty) {
+      if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(seedKey, 'true');
+      return;
+    }
 
     const initialSeed: Omit<AdminRealtimeAlert, 'id' | 'createdAt' | 'read'>[] = [
       {
@@ -571,3 +692,185 @@ export async function seedInitialAdminAlertsIfEmpty(): Promise<void> {
     console.debug('Admin alerts seed notice:', err);
   }
 }
+
+/**
+ * Sends a real-time message from Admin to an individual ServiceMan.
+ * Writes directly to the master Firestore 'messages' collection with all required canonical fields.
+ */
+export async function sendAdminToServicemanMessage(params: {
+  serviceManUid: string;
+  serviceManName?: string;
+  title?: string;
+  message: string;
+  bookingId?: string;
+  type?: 'direct_message' | 'booking' | 'system' | 'admin_announcement';
+  senderAdminUid?: string;
+  senderAdminName?: string;
+}): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  try {
+    const cleanUid = params.serviceManUid.trim();
+    if (!cleanUid) {
+      return { success: false, error: 'serviceManUid is required' };
+    }
+    const cleanMsg = params.message.trim();
+    if (!cleanMsg) {
+      return { success: false, error: 'Message content cannot be empty' };
+    }
+
+    const nowIso = new Date().toISOString();
+    const msgId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const conversationId = params.bookingId
+      ? `conv_booking_${params.bookingId}`
+      : `conv_admin_${cleanUid}`;
+
+    const adminUid = params.senderAdminUid || 'admin_master';
+    const adminName = params.senderAdminName || 'HARDINKAAM Admin';
+
+    const messageDoc = {
+      id: msgId,
+      senderId: adminUid,
+      senderName: adminName,
+      senderRole: 'admin',
+      receiverId: cleanUid,
+      receiverRole: 'service_man',
+      recipientId: cleanUid,
+      recipientUid: cleanUid,
+      conversationId,
+      title: params.title || 'HARDINKAAM Admin Message',
+      message: cleanMsg,
+      text: cleanMsg, // Backward compatibility with existing UI
+      type: params.type || 'direct_message',
+      bookingId: params.bookingId || '',
+      isRead: false,
+      read: false,
+      createdAt: nowIso,
+      timestamp: nowIso,
+    };
+
+    await setDoc(doc(db, 'messages', msgId), messageDoc);
+
+    // Also automatically create an associated notification for immediate push/alerting
+    const notifId = `notif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    await setDoc(doc(db, 'notifications', notifId), {
+      id: notifId,
+      userId: cleanUid,
+      recipientId: cleanUid,
+      recipientUid: cleanUid,
+      recipientRole: 'service_man',
+      senderUid: adminUid,
+      senderId: adminUid,
+      senderRole: 'admin',
+      title: params.title || 'HARDINKAAM Admin Message',
+      message: cleanMsg,
+      type: params.type === 'booking' ? 'booking' : 'direct_message',
+      bookingId: params.bookingId || undefined,
+      messageId: msgId,
+      isRead: false,
+      read: false,
+      targetRole: 'pro',
+      createdAt: nowIso,
+    });
+
+    return { success: true, messageId: msgId };
+  } catch (err: any) {
+    console.error('Failed to send admin-to-serviceman message:', err);
+    return { success: false, error: err.message || 'Failed to dispatch message' };
+  }
+}
+
+/**
+ * Sends a real-time notification to one, multiple, or all approved ServiceMen.
+ * Writes directly to the master Firestore 'notifications' collection with full canonical fields.
+ */
+export async function sendAdminToServicemanNotification(params: {
+  recipients: 'single' | 'multiple' | 'all_approved';
+  serviceManUids?: string[];
+  title: string;
+  message: string;
+  type?: 'booking' | 'direct_message' | 'system' | 'announcement' | 'payment' | 'kyc';
+  bookingId?: string;
+  messageId?: string;
+  senderAdminUid?: string;
+  senderAdminName?: string;
+}): Promise<{ success: boolean; count: number; error?: string }> {
+  try {
+    const cleanTitle = params.title.trim();
+    const cleanMsg = params.message.trim();
+    if (!cleanTitle || !cleanMsg) {
+      return { success: false, count: 0, error: 'Title and message cannot be empty' };
+    }
+
+    let targetUids: string[] = [];
+
+    if (params.recipients === 'all_approved') {
+      try {
+        // Query all approved servicemen from 'users' and 'service_men'
+        const prosSnap = await getDocs(
+          query(collection(db, 'service_men'), limit(100))
+        );
+        prosSnap.forEach((d) => {
+          const data = d.data();
+          const uid = data.userId || d.id;
+          if (uid && (data.isVerified || data.kycStatus === 'verified' || data.kycStatus === 'approved' || data.status === 'active')) {
+            if (!targetUids.includes(uid)) targetUids.push(uid);
+          }
+        });
+
+        // Fallback query users collection if service_men was empty
+        if (targetUids.length === 0) {
+          const usersSnap = await getDocs(
+            query(collection(db, 'users'), limit(100))
+          );
+          usersSnap.forEach((d) => {
+            const data = d.data();
+            if (data.role === 'service_man' && (data.status === 'active' || data.approvalStatus === 'approved')) {
+              if (!targetUids.includes(d.id)) targetUids.push(d.id);
+            }
+          });
+        }
+      } catch (err) {
+        checkAndHandleQuotaError(err);
+      }
+    } else if (params.serviceManUids && params.serviceManUids.length > 0) {
+      targetUids = params.serviceManUids.map((u) => u.trim()).filter(Boolean);
+    }
+
+    if (targetUids.length === 0) {
+      return { success: false, count: 0, error: 'No valid recipient ServiceMen found' };
+    }
+
+    const nowIso = new Date().toISOString();
+    const adminUid = params.senderAdminUid || 'admin_master';
+    let dispatchedCount = 0;
+
+    for (const uid of targetUids) {
+      const notifId = `notif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${dispatchedCount}`;
+      await setDoc(doc(db, 'notifications', notifId), {
+        id: notifId,
+        userId: uid,
+        recipientId: uid,
+        recipientUid: uid,
+        recipientRole: 'service_man',
+        senderUid: adminUid,
+        senderId: adminUid,
+        senderRole: 'admin',
+        title: cleanTitle,
+        message: cleanMsg,
+        type: params.type || 'system',
+        bookingId: params.bookingId || undefined,
+        messageId: params.messageId || undefined,
+        isRead: false,
+        read: false,
+        targetRole: 'pro',
+        createdAt: nowIso,
+      });
+      dispatchedCount++;
+    }
+
+    return { success: true, count: dispatchedCount };
+  } catch (err: any) {
+    console.error('Failed to dispatch admin notification to servicemen:', err);
+    return { success: false, count: 0, error: err.message || 'Failed to dispatch notifications' };
+  }
+}
+

@@ -13,6 +13,8 @@ import {
   Save,
   Building2,
   RefreshCw,
+  Bell,
+  Volume2,
 } from 'lucide-react';
 import { DistrictSettings } from '../../types';
 import { getDistrictConfig, updateDistrictConfig } from '../../services/franchisePartnerService';
@@ -42,7 +44,7 @@ export const DistrictSettingsModal: React.FC<Props> = ({
   // Form State
   const [profitPercentage, setProfitPercentage] = useState<number>(20);
   const [platformFeePercent, setPlatformFeePercent] = useState<number>(15);
-  const [franchiseCommissionPercent, setFranchiseCommissionPercent] = useState<number>(10);
+  const [franchiseCommissionPercent, setFranchiseCommissionPercent] = useState<number>(15);
   const [businessPartnerCommissionPercent, setBusinessPartnerCommissionPercent] = useState<number>(15);
   const [serviceProfessionalSharePercent, setServiceProfessionalSharePercent] = useState<number>(85);
   const [bookingFee, setBookingFee] = useState<number>(0);
@@ -52,6 +54,12 @@ export const DistrictSettingsModal: React.FC<Props> = ({
   const [supportEmail, setSupportEmail] = useState<string>('');
   const [operatingHours, setOperatingHours] = useState<string>('08:00 AM - 08:00 PM');
   const [customNotice, setCustomNotice] = useState<string>('');
+
+  // District-specific booking alert controls
+  const [districtAlarmEnabled, setDistrictAlarmEnabled] = useState<boolean>(true);
+  const [districtOfferExpirySeconds, setDistrictOfferExpirySeconds] = useState<number>(60);
+  const [districtMaxAlertAttempts, setDistrictMaxAlertAttempts] = useState<number>(3);
+  const [districtAlertCustomNotice, setDistrictAlertCustomNotice] = useState<string>('');
 
   useEffect(() => {
     if (!isOpen || !districtId) return;
@@ -76,6 +84,12 @@ export const DistrictSettingsModal: React.FC<Props> = ({
         setSupportEmail(cfg.supportEmail ?? '');
         setOperatingHours(cfg.operatingHours ?? '08:00 AM - 08:00 PM');
         setCustomNotice(cfg.customNotice ?? '');
+
+        // District alert controls
+        setDistrictAlarmEnabled(cfg.districtAlarmEnabled ?? true);
+        setDistrictOfferExpirySeconds(cfg.districtOfferExpirySeconds ?? 60);
+        setDistrictMaxAlertAttempts(cfg.districtMaxAlertAttempts ?? 3);
+        setDistrictAlertCustomNotice(cfg.districtAlertCustomNotice ?? '');
         setLoading(false);
       })
       .catch((err) => {
@@ -110,6 +124,10 @@ export const DistrictSettingsModal: React.FC<Props> = ({
       supportEmail: supportEmail.trim(),
       operatingHours: operatingHours.trim(),
       customNotice: customNotice.trim(),
+      districtAlarmEnabled,
+      districtOfferExpirySeconds: Number(districtOfferExpirySeconds) || 60,
+      districtMaxAlertAttempts: Number(districtMaxAlertAttempts) || 3,
+      districtAlertCustomNotice: districtAlertCustomNotice.trim(),
     };
 
     const res = await updateDistrictConfig(districtId, newSettings, districtName);
@@ -177,6 +195,78 @@ export const DistrictSettingsModal: React.FC<Props> = ({
               </div>
             </div>
 
+            {/* District Booking Alert Controls */}
+            <div className="bg-orange-50/60 p-4 rounded-2xl border border-orange-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-orange-950">
+                  <Bell className="w-4 h-4 text-orange-600" />
+                  <span className="font-black text-xs uppercase tracking-wider">
+                    {districtName} जिला बुकिंग अलर्ट सेटिंग्स (District Alert Controls)
+                  </span>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={districtAlarmEnabled}
+                    onChange={(e) => setDistrictAlarmEnabled(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-stone-200 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-orange-600" />
+                  <span className="ml-2 text-xs font-bold text-stone-700">
+                    {districtAlarmEnabled ? 'अलर्ट चालू' : 'म्यूट'}
+                  </span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">
+                    ऑफ़र प्रतिक्रिया समय (Response Countdown)
+                  </label>
+                  <select
+                    value={districtOfferExpirySeconds}
+                    onChange={(e) => setDistrictOfferExpirySeconds(Number(e.target.value))}
+                    className="w-full px-3 py-1.5 bg-white border border-orange-200 rounded-xl text-stone-900 font-bold text-xs"
+                  >
+                    <option value="30">30 सेकंड (Fast Dispatch)</option>
+                    <option value="45">45 सेकंड</option>
+                    <option value="60">60 सेकंड (अनुशंसित)</option>
+                    <option value="90">90 सेकंड</option>
+                    <option value="120">120 सेकंड</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">
+                    अधिकतम अलर्ट प्रयास (Max Attempts)
+                  </label>
+                  <select
+                    value={districtMaxAlertAttempts}
+                    onChange={(e) => setDistrictMaxAlertAttempts(Number(e.target.value))}
+                    className="w-full px-3 py-1.5 bg-white border border-orange-200 rounded-xl text-stone-900 font-bold text-xs"
+                  >
+                    <option value="1">1 प्रयास</option>
+                    <option value="2">2 प्रयास</option>
+                    <option value="3">3 प्रयास (मानक)</option>
+                    <option value="5">5 प्रयास</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">
+                  जिला अलर्ट कस्टम नोटिस (District Alert Notice Prefix)
+                </label>
+                <input
+                  type="text"
+                  placeholder={`e.g. ${districtName} स्पेशल: तुरंत सेवा दें और इंसेंटिव प्राप्त करें`}
+                  value={districtAlertCustomNotice}
+                  onChange={(e) => setDistrictAlertCustomNotice(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-white border border-orange-200 rounded-xl text-stone-900 text-xs"
+                />
+              </div>
+            </div>
+
             {/* Financial Commission & Rates Grid */}
             <div>
               <h4 className="text-xs font-black uppercase tracking-wider text-stone-500 mb-3 flex items-center gap-1.5">
@@ -230,7 +320,7 @@ export const DistrictSettingsModal: React.FC<Props> = ({
                 {/* Franchise Partner Commission */}
                 <div className="bg-stone-50 p-3.5 rounded-2xl border border-stone-200">
                   <label className="block text-xs font-black text-stone-800 mb-1">
-                    फ्रेंचाइज़ी पार्टनर रॉयल्टी / शेयर (%)
+                    फ्रेंचाइज़ी कमीशन (हार्डिनकाम को देय %)
                   </label>
                   <div className="relative">
                     <input
@@ -244,7 +334,9 @@ export const DistrictSettingsModal: React.FC<Props> = ({
                     />
                     <span className="absolute right-3 top-2.5 text-stone-500 text-xs font-bold">%</span>
                   </div>
-                  <p className="text-[11px] text-stone-500 mt-1">स्थानीय जिला एडमिन को देय शेयर</p>
+                  <p className="text-[11px] text-stone-500 mt-1">
+                    डिफ़ॉल्ट 15% — हार्डिनकाम को देय कमीशन (फ्रेंचाइज़ी आय नहीं)।
+                  </p>
                 </div>
 
                 {/* Service Pro Share */}

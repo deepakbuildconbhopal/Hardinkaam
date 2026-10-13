@@ -23,11 +23,13 @@ import {
   Send,
   HelpCircle,
   WifiOff,
+  QrCode,
 } from 'lucide-react';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, collection, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { Booking, ServiceMan, ServiceManLocationData } from '../../types';
 import { LiveTrackingMap } from '../common/LiveTrackingMap';
+import { CustomerBookingQrModal } from './CustomerBookingQrModal';
 import {
   subscribeToServiceTracking,
   updateCustomerTrackingLocation,
@@ -46,10 +48,12 @@ import {
 } from '../../services/serviceRouteService';
 import { getOrCreateArrivalOtp } from '../../services/arrivalOtpService';
 import { CustomerHelpModal } from './CustomerHelpModal';
+import { PostServiceFeedbackModal } from './PostServiceFeedbackModal';
 import { WorkServiceTimer } from '../common/WorkServiceTimer';
 import { ExtraChargesManager } from '../common/ExtraChargesManager';
 import { HardinkaamServiceBill } from '../common/HardinkaamServiceBill';
 import { useAuth } from '../../context/AuthContext';
+import { useNotifications } from '../../context/NotificationContext';
 import {
   isAuthorizedToViewTracking,
   isTrackingTerminal,
@@ -59,6 +63,7 @@ import {
   LIVE_TRACKING_MESSAGES,
   getLiveTrackingErrorInfo,
 } from '../../services/liveTrackingQuality';
+import { Bell } from 'lucide-react';
 
 interface LiveServiceTrackerModalProps {
   booking: Booking;
@@ -74,6 +79,7 @@ export const LiveServiceTrackerModal: React.FC<LiveServiceTrackerModalProps> = (
   onOpenChat,
 }) => {
   const { currentUser, userProfile } = useAuth();
+  const { isPushSubscribed, pushPermission, enablePushNotifications } = useNotifications();
   const { gpsState, gpsErrorMessage, setGpsErrorFromCode, resetGpsState } = useGpsStatus();
 
   const [booking, setBooking] = useState<Booking>(initialBooking);
@@ -83,6 +89,8 @@ export const LiveServiceTrackerModal: React.FC<LiveServiceTrackerModalProps> = (
   const [isLoadingOtp, setIsLoadingOtp] = useState<boolean>(false);
   const [lastTick, setLastTick] = useState<number>(Date.now());
   const [lastGpsTime, setLastGpsTime] = useState<string | null>(null);
+  const [isQrModalOpen, setIsQrModalOpen] = useState<boolean>(false);
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState<boolean>(false);
 
   // Prevent unauthorized users from viewing locations
   const isAuthorized = useMemo(() => {
@@ -115,11 +123,17 @@ export const LiveServiceTrackerModal: React.FC<LiveServiceTrackerModalProps> = (
 
   // Listen for real-time booking updates from Firestore
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, 'bookings', initialBooking.id), (snapshot) => {
-      if (snapshot.exists()) {
-        setBooking({ id: snapshot.id, ...snapshot.data() } as Booking);
+    const unsub = onSnapshot(
+      doc(db, 'bookings', initialBooking.id),
+      (snapshot) => {
+        if (snapshot.exists()) {
+          setBooking({ id: snapshot.id, ...snapshot.data() } as Booking);
+        }
+      },
+      (err) => {
+        console.warn('Booking tracker listener notice:', err.message);
       }
-    });
+    );
     return () => unsub();
   }, [initialBooking.id]);
 
@@ -303,23 +317,25 @@ export const LiveServiceTrackerModal: React.FC<LiveServiceTrackerModalProps> = (
   // Pro and Customer / Destination Coordinates for Distance Calculation
   const proCoords = liveServicemanLocation || booking.serviceManLocation;
   const custCoords = liveCustomerLocation || destinationCoords;
+  const custLatitude = (liveCustomerLocation as any)?.latitude ?? (destinationCoords as any)?.lat ?? (destinationCoords as any)?.latitude;
+  const custLongitude = (liveCustomerLocation as any)?.longitude ?? (destinationCoords as any)?.lng ?? (destinationCoords as any)?.longitude;
 
   const liveDistanceKm = useMemo(() => {
     if (
       proCoords?.latitude &&
       proCoords?.longitude &&
-      custCoords?.latitude &&
-      custCoords?.longitude
+      custLatitude &&
+      custLongitude
     ) {
       return calculateHaversineDistanceKm(
         proCoords.latitude,
         proCoords.longitude,
-        custCoords.latitude,
-        custCoords.longitude
+        custLatitude,
+        custLongitude
       );
     }
     return null;
-  }, [proCoords?.latitude, proCoords?.longitude, custCoords?.latitude, custCoords?.longitude]);
+  }, [proCoords?.latitude, proCoords?.longitude, custLatitude, custLongitude]);
 
   const formattedDistance = useMemo(() => {
     if (isArrived || isWorkStarted) return 'At location';
@@ -421,11 +437,30 @@ export const LiveServiceTrackerModal: React.FC<LiveServiceTrackerModalProps> = (
     setTimeout(() => setCopiedOtp(false), 2500);
   };
 
+  const handleSendQuickMessage = async (text: string) => {
+    try {
+      const nowIso = new Date().toISOString();
+      await addDoc(collection(db, 'messages'), {
+        bookingId: booking.id,
+        senderId: booking.customerId || 'customer',
+        senderName: booking.customerName || 'Customer',
+        receiverId: booking.serviceManId || 'pro_serviceman',
+        text,
+        timestamp: nowIso,
+        read: false,
+      });
+      onOpenChat(booking);
+    } catch (err) {
+      console.error('Failed to send quick message:', err);
+      onOpenChat(booking);
+    }
+  };
+
   const handleCallPro = () => {
     if (proInfo.phone) {
       window.open(`tel:${proInfo.phone}`, '_self');
     } else {
-      window.open('tel:+919826012345', '_self');
+      window.open('tel:+916267546945', '_self');
     }
   };
 
@@ -577,6 +612,39 @@ export const LiveServiceTrackerModal: React.FC<LiveServiceTrackerModalProps> = (
 
         {/* Modal Scrollable Body */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-5">
+          {/* FCM Push Notification Status & Quick Enable Banner */}
+          <div className="p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="p-1.5 rounded-xl bg-indigo-600 text-white shrink-0">
+                <Bell className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <span className="font-bold text-indigo-950 block">रियल-टाइम पुश नोटिफिकेशन (FCM Alerts)</span>
+                <span className="text-[11px] text-indigo-700 block truncate">
+                  {isPushSubscribed
+                    ? 'सक्रिय: तकनीशियन आगमन व स्टेटस अपडेट सीधे स्क्रीन पर प्राप्त होंगे'
+                    : 'तकनीशियन की लोकेशन व ओटीपी अलर्ट तुरंत पाने हेतु पुश सूचना चालू करें'}
+                </span>
+              </div>
+            </div>
+
+            {!isPushSubscribed && pushPermission !== 'denied' && (
+              <button
+                type="button"
+                onClick={() => enablePushNotifications()}
+                className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shrink-0 cursor-pointer shadow-xs transition"
+              >
+                चालू करें (Enable)
+              </button>
+            )}
+
+            {isPushSubscribed && (
+              <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 text-[11px] font-bold shrink-0 border border-emerald-200">
+                Active ✓
+              </span>
+            )}
+          </div>
+
           {/* Phase 12: Live Tracking Status / Error Banner (GPS Off, GPS Denied, Internet Disconnected, Serviceman Unavailable) */}
           {trackingErrorInfo && (
             <div
@@ -603,7 +671,7 @@ export const LiveServiceTrackerModal: React.FC<LiveServiceTrackerModalProps> = (
                 )}
                 <span>{trackingErrorInfo.message}</span>
               </div>
-              {(trackingErrorInfo.type === 'gps_off' || trackingErrorInfo.type === 'gps_denied') && (
+              {(trackingErrorInfo.type === 'gps_off' || trackingErrorInfo.type === 'gps_permission_denied') && (
                 <button
                   type="button"
                   onClick={requestCustomerGps}
@@ -786,6 +854,25 @@ export const LiveServiceTrackerModal: React.FC<LiveServiceTrackerModalProps> = (
               >
                 <MessageSquare className="w-4 h-4 text-orange-600" />
                 <span>Message</span>
+              </button>
+            </div>
+
+            {/* Quick Messages for Quick Update */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-[10px] font-semibold text-stone-500 uppercase tracking-wider">Quick Message:</span>
+              <button
+                type="button"
+                onClick={() => handleSendQuickMessage('मैं आपका इंतजार कर रहा हूँ')}
+                className="text-[11px] px-2.5 py-1 rounded-full bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-200 font-medium transition-colors cursor-pointer"
+              >
+                मैं आपका इंतजार कर रहा हूँ
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSendQuickMessage('आप कितनी देर में पहुँचेंगे?')}
+                className="text-[11px] px-2.5 py-1 rounded-full bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-200 font-medium transition-colors cursor-pointer"
+              >
+                आप कितनी देर में पहुँचेंगे?
               </button>
             </div>
           </div>
@@ -1063,6 +1150,17 @@ export const LiveServiceTrackerModal: React.FC<LiveServiceTrackerModalProps> = (
                   <span>•</span>
                   <span className="text-emerald-700 font-bold">Server Authenticated</span>
                 </div>
+
+                {/* Show Booking QR Code Button */}
+                <button
+                  type="button"
+                  onClick={() => setIsQrModalOpen(true)}
+                  className="mt-3.5 px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-xs transition cursor-pointer"
+                  title="Show QR Code on your screen for serviceman to scan"
+                >
+                  <QrCode className="w-4 h-4" />
+                  <span>Show Booking QR Code for Technician</span>
+                </button>
               </div>
             </div>
           ) : booking.status === 'completed' || booking.finalBill ? (
@@ -1093,6 +1191,41 @@ export const LiveServiceTrackerModal: React.FC<LiveServiceTrackerModalProps> = (
                 bill={booking.finalBill}
                 booking={booking}
               />
+
+              {/* Feedback & Review Callout */}
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                    <Star className="w-5 h-5 fill-white" />
+                  </div>
+                  <div>
+                    <h5 className="text-xs font-black text-stone-900">
+                      {booking.isReviewed ? 'Feedback Submitted ✓' : 'Rate Your Service Experience'}
+                    </h5>
+                    <p className="text-[11px] text-stone-600">
+                      {booking.isReviewed
+                        ? `You rated this service ${booking.rating || 5}★. Thank you for helping our Bhopal community!`
+                        : `Share honest feedback for ${booking.serviceManName || 'your professional'} to help improve service quality.`}
+                    </p>
+                  </div>
+                </div>
+
+                {!booking.isReviewed ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsFeedbackOpen(true)}
+                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-black flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    <Star className="w-3.5 h-3.5 fill-white" />
+                    <span>Rate Experience</span>
+                  </button>
+                ) : (
+                  <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-extrabold flex items-center gap-1 border border-emerald-200">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>{booking.rating || 5}★ Rated</span>
+                  </span>
+                )}
+              </div>
             </div>
           ) : (
             /* Work Started: Live Timer and Extra Charges Approval Manager */
@@ -1195,6 +1328,26 @@ export const LiveServiceTrackerModal: React.FC<LiveServiceTrackerModalProps> = (
           isOpen={isHelpOpen}
           onClose={() => setIsHelpOpen(false)}
           recentBookings={[booking]}
+        />
+      )}
+
+      {/* Customer Booking QR Modal */}
+      <CustomerBookingQrModal
+        isOpen={isQrModalOpen}
+        onClose={() => setIsQrModalOpen(false)}
+        booking={booking}
+        arrivalOtp={arrivalOtp || booking.otp}
+      />
+
+      {/* Post-Service Feedback & Rating Modal */}
+      {isFeedbackOpen && (
+        <PostServiceFeedbackModal
+          isOpen={isFeedbackOpen}
+          booking={booking}
+          onClose={() => setIsFeedbackOpen(false)}
+          onSubmitted={() => {
+            setIsFeedbackOpen(false);
+          }}
         />
       )}
     </div>

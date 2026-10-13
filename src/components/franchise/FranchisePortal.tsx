@@ -247,7 +247,7 @@ export const FranchisePortal: React.FC<Props> = ({ onBackToHome, defaultState, d
     const text = encodeURIComponent(
       `नमस्ते DEEPAK BUILDCON! मैंने फ्रेंचाइज़ी पोर्टल पर आवेदन किया है।\n\nआवेदन क्रमांक: ${submissionSuccess.id}\nआवेदक का नाम: ${submissionSuccess.applicantName}\nस्थान: ${submissionSuccess.cityOrVillage}, ज़िला: ${submissionSuccess.district} (${submissionSuccess.state})\nमोबाइल: ${submissionSuccess.phone}\nफीस व नियम विवरण प्राप्त हुआ। कृपया फ्रेंचाइज़ी अलॉटमेंट की अगली प्रक्रिया बताएं।`
     );
-    return `https://wa.me/919826012345?text=${text}`;
+    return `https://wa.me/916267546945?text=${text}`;
   }, [submissionSuccess]);
 
   return (
@@ -599,7 +599,7 @@ export const FranchisePortal: React.FC<Props> = ({ onBackToHome, defaultState, d
                       required
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
-                      placeholder="e.g. 9826012345"
+                      placeholder="e.g. 6267546945"
                       className="w-full px-3.5 py-2 text-xs rounded-xl border border-stone-200 focus:ring-2 focus:ring-orange-500 font-mono"
                     />
                   </div>

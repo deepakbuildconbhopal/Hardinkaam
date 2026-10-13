@@ -1,5 +1,3 @@
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { Booking } from '../types';
 
 export interface CustomerExportInfo {
@@ -145,7 +143,7 @@ export const exportBookingsToCSV = (
 /**
  * Export booking history to an executive summary PDF
  */
-export const exportBookingsToPDF = (
+export const exportBookingsToPDF = async (
   bookings: Booking[],
   customerInfo: CustomerExportInfo = {},
   filterName: string = 'All',
@@ -155,6 +153,9 @@ export const exportBookingsToPDF = (
     alert('No bookings available to download.');
     return;
   }
+
+  const { default: jsPDF } = await import('jspdf');
+  const { default: autoTable } = await import('jspdf-autotable');
 
   const effectiveRange = dateRangeLabel || customerInfo.dateRangeLabel || 'All Time';
 
@@ -191,7 +192,7 @@ export const exportBookingsToPDF = (
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.setTextColor(254, 243, 199);
-  doc.text('India’s Trusted On-Demand Home & Local Services • hardinkaam.com', 36, 44);
+  doc.text('India’s Trusted On-Demand Home & Local Services • www.hardinkaam.online', 36, 44);
 
   // Statement Label on Right
   doc.setFont('helvetica', 'bold');
@@ -360,7 +361,7 @@ export const exportBookingsToPDF = (
       // Support & Verification Line
       const footerY = pageHeight - 18;
       doc.text(
-        'HARDINKAAM Verified Service Guarantee • 24x7 Support: 1800-889-2555 | support@hardinkaam.com • Bhopal, MP',
+        'HARDINKAAM Verified Service Guarantee • 24x7 Support: +91 62675 46945 | www.hardinkaam.online • Bhopal, MP',
         36,
         footerY
       );
@@ -386,11 +387,14 @@ export const exportBookingsToPDF = (
 /**
  * Export a single booking receipt/invoice to a formal PDF
  */
-export const exportSingleInvoicePDF = (
+export const exportSingleInvoicePDF = async (
   booking: Booking,
   customerInfo: CustomerExportInfo = {}
 ) => {
   if (!booking) return;
+
+  const { default: jsPDF } = await import('jspdf');
+  const { default: autoTable } = await import('jspdf-autotable');
 
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -563,7 +567,7 @@ export const exportSingleInvoicePDF = (
   doc.setTextColor(100, 116, 139);
   doc.text('• 30-Day Post-Service Guarantee included with all standard repair jobs.', 40, finalY + 35);
   doc.text('• Genuine MRP spare parts invoice provided directly by verified technician.', 40, finalY + 48);
-  doc.text('• Need assistance? Call toll-free 1800-889-2555 or email support@hardinkaam.com', 40, finalY + 61);
+  doc.text('• Need assistance? Call helpline +91 62675 46945 or email support@hardinkaam.com', 40, finalY + 61);
 
   // Bottom Footer
   doc.setFontSize(8);

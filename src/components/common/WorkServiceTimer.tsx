@@ -3,6 +3,7 @@ import { Clock, Play, CheckCircle2 } from 'lucide-react';
 
 interface WorkServiceTimerProps {
   workStartedAt?: string;
+  workCompletedAt?: string;
   workEndedAt?: string;
   status?: string;
   workDurationFormatted?: string;
@@ -17,6 +18,7 @@ interface WorkServiceTimerProps {
  */
 export const WorkServiceTimer: React.FC<WorkServiceTimerProps> = ({
   workStartedAt,
+  workCompletedAt,
   workEndedAt,
   status,
   workDurationFormatted,
@@ -25,7 +27,8 @@ export const WorkServiceTimer: React.FC<WorkServiceTimerProps> = ({
 }) => {
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
 
-  const isCompleted = status === 'completed' || !!workEndedAt;
+  const completedTimestamp = workCompletedAt || workEndedAt;
+  const isCompleted = status === 'completed' || !!completedTimestamp;
   const isStarted = !!workStartedAt && (status === 'in_progress' || status === 'work_started' || isCompleted);
 
   useEffect(() => {
@@ -37,8 +40,8 @@ export const WorkServiceTimer: React.FC<WorkServiceTimerProps> = ({
     const startMs = new Date(workStartedAt).getTime();
     if (isNaN(startMs)) return;
 
-    if (isCompleted && workEndedAt) {
-      const endMs = new Date(workEndedAt).getTime();
+    if (isCompleted && completedTimestamp) {
+      const endMs = new Date(completedTimestamp).getTime();
       if (!isNaN(endMs)) {
         setElapsedSeconds(Math.max(0, Math.floor((endMs - startMs) / 1000)));
         return;
@@ -55,7 +58,7 @@ export const WorkServiceTimer: React.FC<WorkServiceTimerProps> = ({
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [workStartedAt, workEndedAt, isCompleted]);
+  }, [workStartedAt, completedTimestamp, isCompleted]);
 
   // Format into HH:MM:SS
   const formatTime = (totalSec: number) => {

@@ -3,6 +3,11 @@ User-agent: *
 Allow: /
 Allow: /#categories
 Allow: /#franchise
+Allow: /#electrician
+Allow: /#plumber
+Allow: /#carpenter
+Allow: /#ac-repair
+Allow: /#civil-construction
 
 # Sitemaps
-Sitemap: https://hardinkaam.com/sitemap.xml
+Sitemap: https://www.hardinkaam.online/sitemap.xml

@@ -18,10 +18,11 @@ import { useLanguage } from '../../context/LanguageContext';
 import { Service, ServiceMan } from '../../types';
 
 interface Props {
-  onProceedToBooking: (service: Service) => void;
+  onProceedToBooking?: (service: Service) => void;
+  onProceedToCheckout?: () => void;
 }
 
-export const CartDrawer: React.FC<Props> = ({ onProceedToBooking }) => {
+export const CartDrawer: React.FC<Props> = ({ onProceedToBooking, onProceedToCheckout }) => {
   const {
     items,
     removeItem,
@@ -51,9 +52,11 @@ export const CartDrawer: React.FC<Props> = ({ onProceedToBooking }) => {
 
     // Pick first service to launch existing robust booking modal flow
     const firstServiceItem = items.find((i) => i.rawService);
-    if (firstServiceItem && firstServiceItem.rawService) {
+    if (firstServiceItem && firstServiceItem.rawService && onProceedToBooking) {
       onProceedToBooking(firstServiceItem.rawService);
-    } else if (items[0].rawPackage) {
+    } else if (onProceedToCheckout) {
+      onProceedToCheckout();
+    } else if (items[0].rawPackage && onProceedToBooking) {
       // Fallback pseudo service for package
       const pseudoService: Service = {
         id: items[0].packageId || 'custom_pkg',

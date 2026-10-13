@@ -35,7 +35,9 @@ export type FestivalThemeId =
   | 'new_year'
   | 'pongal'
   | 'maha_shivratri_premium'
-  | 'gandhi_jayanti';
+  | 'gandhi_jayanti'
+  | 'darkblue'
+  | 'dark_blue';
 
 export interface ThemeColors {
   primary: string;         // Main brand/accent color (buttons, active states, highlights)
@@ -49,6 +51,7 @@ export interface ThemeColors {
   badgeBg: string;         // Festive badge pill background
   badgeText: string;       // Festive badge pill text
   headerBorder: string;    // Subtle header accent/border
+  backgroundTint?: string; // Subtle page background tint
 }
 
 export interface FestivalDateInfo {
@@ -95,6 +98,7 @@ export interface FestivalTheme {
   colors: ThemeColors;
   previewPalette: string[];
   metadata?: FestivalMetadata;
+  isDark?: boolean;
 }
 
 export interface ThemeSettingsDocument {

@@ -23,6 +23,7 @@ import {
   limit,
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../utils/sparkQuotaGuard';
 import {
   AdminBroadcastMessage,
   BroadcastAudience,
@@ -258,6 +259,10 @@ class AdminBroadcastService {
    * Fetch all broadcast records for Super Admin list
    */
   public async getAllBroadcasts(): Promise<AdminBroadcastMessage[]> {
+    if (isResourceExhausted()) {
+      return this.memoryCache;
+    }
+
     try {
       const q = query(collection(db, 'broadcast_announcements'), limit(50));
       const snap = await getDocs(q);
@@ -274,6 +279,7 @@ class AdminBroadcastService {
       }
     } catch (err) {
       console.warn('Error fetching all broadcasts from Firestore:', err);
+      checkAndHandleQuotaError(err);
     }
 
     return this.memoryCache;
@@ -287,6 +293,16 @@ class AdminBroadcastService {
     userRoleAudience: BroadcastAudience,
     callback: (messages: AdminBroadcastMessage[]) => void
   ): () => void {
+    if (isResourceExhausted()) {
+      const fallback = this.memoryCache.filter(
+        (m) =>
+          m.isActive &&
+          (m.audience === 'all' || m.audience === userRoleAudience)
+      );
+      callback(fallback);
+      return () => {};
+    }
+
     try {
       const q = query(
         collection(db, 'broadcast_announcements'),
@@ -315,6 +331,7 @@ class AdminBroadcastService {
         },
         (err) => {
           console.warn('Broadcast listener note (falling back to cache):', err.message);
+          checkAndHandleQuotaError(err);
           const fallback = this.memoryCache.filter(
             (m) =>
               m.isActive &&
@@ -327,6 +344,7 @@ class AdminBroadcastService {
       return unsubscribe;
     } catch (err) {
       console.warn('Error establishing broadcast listener:', err);
+      checkAndHandleQuotaError(err);
       const fallback = this.memoryCache.filter(
         (m) =>
           m.isActive &&

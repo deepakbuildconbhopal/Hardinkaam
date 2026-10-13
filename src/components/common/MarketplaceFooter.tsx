@@ -54,25 +54,25 @@ export const MarketplaceFooter: React.FC<Props> = ({ onSelectTab, onOpenHelp, on
                 className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-bold border border-orange-400/30 transition shadow-sm active:scale-95 cursor-pointer"
               >
                 <Smartphone className="w-4 h-4 text-amber-200" />
-                <span>📲 Download App (PWA / APK)</span>
+                <span>📲 Install App (PWA)</span>
               </button>
             )}
 
             <a
-              href="tel:+919826012345"
+              href="tel:+916267546945"
               className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-stone-900 hover:bg-stone-800 text-stone-200 border border-stone-800 transition-colors"
             >
               <Phone className="w-4 h-4 text-orange-500" />
-              <span>+91 98260 12345 (Helpline)</span>
+              <span>+91 62675 46945 (Helpline)</span>
             </a>
             <a
-              href="https://wa.me/919826012345"
+              href="https://wa.me/916267546945"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-800/40 transition-colors"
             >
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span>WhatsApp: +91 98260 12345</span>
+              <span>WhatsApp: +91 62675 46945</span>
             </a>
           </div>
         </div>
@@ -244,7 +244,18 @@ export const MarketplaceFooter: React.FC<Props> = ({ onSelectTab, onOpenHelp, on
 
         {/* Bottom copyright */}
         <div className="pt-6 border-t border-stone-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-stone-400">
-          <p>© {new Date().getFullYear()} HARDINKAAM. {t('allRightsReserved', 'All Rights Reserved.')}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p>© {new Date().getFullYear()} HARDINKAAM. {t('allRightsReserved', 'All Rights Reserved.')}</p>
+            <span className="text-stone-600 hidden sm:inline">•</span>
+            <a
+              href="https://www.hardinkaam.online"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-orange-400 hover:text-orange-300 font-bold tracking-wide transition-colors"
+            >
+              www.hardinkaam.online
+            </a>
+          </div>
           <p className="flex items-center gap-1 text-stone-300">
             {t('madeWithLoveInBhopal', 'Proudly built for Bhopal ❤️')}
           </p>

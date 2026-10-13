@@ -20,6 +20,11 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { Booking, BookingOffer, BookingOfferStatus, ServiceMan } from '../types';
+import {
+  notifyBookingOffer,
+  notifyBookingAccepted,
+} from './bookingNotificationIntegrationService';
+import { servicemanAlarmSettingsService } from './servicemanAlarmSettingsService';
 
 /**
  * Result of attempting to accept a booking offer
@@ -57,6 +62,31 @@ export interface AcceptOfferParams {
  * DO NOT notify unrelated Service Professionals.
  */
 export function checkServiceManEligibility(pro: ServiceMan, booking: Booking): boolean {
+  const adminSettings = servicemanAlarmSettingsService.getAdminSettings();
+
+  // 0. Check global alarm enabled
+  if (adminSettings && adminSettings.globalAlarmEnabled === false) {
+    return false;
+  }
+
+  // 0.1 Check district-wise availability if configured
+  if (adminSettings && adminSettings.enabledDistricts && adminSettings.enabledDistricts.length > 0 && !adminSettings.enabledDistricts.includes('all')) {
+    const bookingDistrict = (booking.districtId || (booking as any).assignedDistrictId || '').toLowerCase().trim();
+    const isDistrictEnabled = adminSettings.enabledDistricts.some((d) => d.toLowerCase().trim() === bookingDistrict || bookingDistrict.includes(d.toLowerCase().trim()));
+    if (bookingDistrict && !isDistrictEnabled) {
+      return false;
+    }
+  }
+
+  // 0.2 Check category eligibility if configured
+  if (adminSettings && adminSettings.eligibleCategories && adminSettings.eligibleCategories.length > 0 && !adminSettings.eligibleCategories.includes('all')) {
+    const bookingCat = (booking.categoryId || '').toLowerCase().trim();
+    const isCategoryEligible = adminSettings.eligibleCategories.some((c) => c.toLowerCase().trim() === bookingCat || bookingCat.includes(c.toLowerCase().trim()));
+    if (bookingCat && !isCategoryEligible) {
+      return false;
+    }
+  }
+
   // 1. active ServiceMan check
   const isSuspended = (pro as any).status === 'suspended' || (pro as any).accountStatus === 'suspended';
   const isBlocked = (pro as any).status === 'blocked' || (pro as any).accountStatus === 'blocked';
@@ -66,9 +96,10 @@ export function checkServiceManEligibility(pro: ServiceMan, booking: Booking): b
   }
 
   // 2. approved/verified according to existing rules
+  const requireKyc = adminSettings?.requireKycVerified !== false;
   const isKycVerified = pro.kycStatus === 'verified' || (pro as any).kycStatus === 'approved';
   const isVerifiedFlag = pro.isVerified === true;
-  if (!isVerifiedFlag && !isKycVerified) {
+  if (requireKyc && !isVerifiedFlag && !isKycVerified) {
     return false;
   }
 
@@ -78,6 +109,22 @@ export function checkServiceManEligibility(pro: ServiceMan, booking: Booking): b
   }
   if ((pro as any).dutyStatus === 'busy' || (pro as any).isBusy === true) {
     return false;
+  }
+
+  // 3.1 Minimum rating threshold check
+  if (adminSettings?.minRatingThreshold && adminSettings.minRatingThreshold > 0) {
+    const proRating = typeof pro.rating === 'number' ? pro.rating : 5.0;
+    if (proRating < adminSettings.minRatingThreshold) {
+      return false;
+    }
+  }
+
+  // 3.2 Maximum active jobs cap
+  if (adminSettings?.maxActiveJobsCap && adminSettings.maxActiveJobsCap > 0) {
+    const activeCount = typeof (pro as any).activeBookingsCount === 'number' ? (pro as any).activeBookingsCount : 0;
+    if (activeCount >= adminSettings.maxActiveJobsCap) {
+      return false;
+    }
   }
 
   // 4. correct service / category
@@ -254,6 +301,13 @@ class BookingOfferService {
 
       await batch.commit();
 
+      // Dispatch deduplicated in-app notifications to eligible professionals
+      for (const created of createdOffers) {
+        notifyBookingOffer(booking, created.serviceManId, created.offerId).catch((err) => {
+          console.warn('[BookingOfferService] Non-fatal notification error for offer:', err);
+        });
+      }
+
       console.log(
         `[BookingOfferService] Dispatched ${createdOffers.length} offers for booking ${booking.id} to verified pros:`,
         eligiblePros.map((p) => `${p.name} (${p.id})`)
@@ -429,6 +483,19 @@ class BookingOfferService {
         await this.expireRemainingOffers(bookingId, offerId);
       } catch (invalidationErr) {
         console.warn('[BookingOfferService] Error invalidating other offers:', invalidationErr);
+      }
+
+      // Dispatch deduplicated booking accepted in-app notification
+      try {
+        const bookingSnap = await getDoc(bookingRef);
+        if (bookingSnap.exists()) {
+          await notifyBookingAccepted(
+            bookingSnap.data() as Booking,
+            serviceManName || 'Verified Professional'
+          );
+        }
+      } catch (notifErr) {
+        console.warn('[BookingOfferService] Non-fatal notifyBookingAccepted error:', notifErr);
       }
 
       return {

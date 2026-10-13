@@ -17,7 +17,7 @@ export const AdSenseNativeCard: React.FC<Props> = ({
   subtitle = 'घर का नक्शा, 3D एलिवेशन, सुपरवाइज्ड सिविल वर्क एवं लीगल कंसल्टेशन। आज ही संपर्क करें।',
   badge = 'प्रायोजित • Featured Sponsor',
   ctaText = 'मुफ्त साइट विजिट',
-  ctaLink = 'tel:+919826012345',
+  ctaLink = 'tel:+916267546945',
 }) => {
   return (
     <div

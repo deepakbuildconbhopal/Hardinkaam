@@ -4,8 +4,9 @@ import { CheckCircle2, Zap, AlertCircle, Info, X, ExternalLink } from 'lucide-re
 export interface ToastMessage {
   id: string;
   title: string;
-  description: string;
-  type: 'accepted' | 'in_progress' | 'success' | 'info' | 'warning';
+  description?: string;
+  message?: string;
+  type: 'accepted' | 'in_progress' | 'success' | 'info' | 'warning' | 'error';
   bookingId?: string;
   serviceName?: string;
   proName?: string;
@@ -15,7 +16,8 @@ export interface ToastMessage {
 
 interface ToastContextType {
   toasts: ToastMessage[];
-  addToast: (toast: Omit<ToastMessage, 'id' | 'createdAt'>) => string;
+  addToast: (toast: Omit<ToastMessage, 'id' | 'createdAt'> | string, type?: ToastMessage['type']) => string;
+  showToast: (title: string, type?: ToastMessage['type'] | string, description?: string) => string;
   dismissToast: (id: string) => void;
   onOpenBooking?: (bookingId: string) => void;
   setOnOpenBookingHandler: (handler: (bookingId: string) => void) => void;
@@ -36,8 +38,16 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   const addToast = useCallback(
-    (toastData: Omit<ToastMessage, 'id' | 'createdAt'>) => {
+    (toastInput: Omit<ToastMessage, 'id' | 'createdAt'> | string, maybeType?: ToastMessage['type']) => {
       const id = 'toast_' + Math.random().toString(36).substring(2, 9);
+      const toastData: Omit<ToastMessage, 'id' | 'createdAt'> =
+        typeof toastInput === 'string'
+          ? {
+              title: toastInput,
+              type: maybeType || 'info',
+            }
+          : toastInput;
+
       const newToast: ToastMessage = {
         ...toastData,
         id,
@@ -59,16 +69,35 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [dismissToast]
   );
 
+  const showToast = useCallback(
+    (title: string, maybeType?: ToastMessage['type'] | string, description?: string) => {
+      let type: ToastMessage['type'] = 'info';
+      if (maybeType === 'success' || maybeType === 'accepted') type = 'success';
+      else if (maybeType === 'error' || maybeType === 'warning') type = 'error';
+      else if (maybeType === 'in_progress') type = 'in_progress';
+      else if (maybeType === 'info') type = 'info';
+
+      return addToast({ title, type, description });
+    },
+    [addToast]
+  );
+
+  const onOpenBooking = onOpenBookingRef.current || undefined;
+
+  const contextValue = React.useMemo<ToastContextType>(
+    () => ({
+      toasts,
+      addToast,
+      showToast,
+      dismissToast,
+      onOpenBooking,
+      setOnOpenBookingHandler,
+    }),
+    [toasts, addToast, showToast, dismissToast, onOpenBooking, setOnOpenBookingHandler]
+  );
+
   return (
-    <ToastContext.Provider
-      value={{
-        toasts,
-        addToast,
-        dismissToast,
-        onOpenBooking: onOpenBookingRef.current || undefined,
-        setOnOpenBookingHandler,
-      }}
-    >
+    <ToastContext.Provider value={contextValue}>
       {children}
       {/* Toast Notification Container */}
       <div
@@ -135,7 +164,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                     {toast.title}
                   </h4>
                   <p className="text-xs text-stone-300 mt-1 leading-relaxed line-clamp-2">
-                    {toast.description}
+                    {toast.description || toast.message}
                   </p>
 
                   {/* Interactive Action: Open Booking Modal */}

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { UniversalImageUploader } from '../common/UniversalImageUploader';
+import { AdSenseBanner } from '../ads/AdSenseBanner';
 
 export const ProKYC: React.FC = () => {
   const { userProfile } = useAuth();
@@ -210,6 +211,14 @@ export const ProKYC: React.FC = () => {
           </div>
         </form>
       </div>
+
+      {/* Google AdSense Intact Unit */}
+      <AdSenseBanner
+        slot="9182736450"
+        format="leaderboard"
+        category="tools"
+        label="गूगल एडसेंस • PRO VERIFICATION SPONSOR"
+      />
     </div>
   );
 };

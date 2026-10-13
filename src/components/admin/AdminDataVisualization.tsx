@@ -41,6 +41,7 @@ import {
   Legend,
 } from 'recharts';
 import { Booking, ServiceMan, Category, Service } from '../../types';
+import { BookingConversionFunnelWidget } from './BookingConversionFunnelWidget';
 
 interface Props {
   bookings: Booking[];
@@ -779,6 +780,13 @@ export const AdminDataVisualization: React.FC<Props> = ({
           </div>
         </div>
       </div>
+
+      {/* Feature Highlight: Booking Conversion Funnel Widget (Recharts Engine) */}
+      <BookingConversionFunnelWidget
+        bookings={bookings}
+        categories={categories}
+        services={services}
+      />
 
       {/* ========================================================= */}
       {/* SECTION 1: BOOKING TRENDS                                  */}

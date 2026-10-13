@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   UploadCloud,
+  Upload,
   Camera,
   Check,
   AlertCircle,
@@ -17,6 +18,9 @@ interface UniversalImageUploaderProps {
   subLabel?: string;
   currentValue?: string;
   onChange: (value: string) => void;
+  onFileSelect?: (file: File) => void;
+  allowMultiple?: boolean;
+  onBulkSelect?: (files: File[]) => void;
   maxDimension?: number;
   quality?: number;
   maxSizeKB?: number;
@@ -31,6 +35,9 @@ export const UniversalImageUploader: React.FC<UniversalImageUploaderProps> = ({
   subLabel,
   currentValue,
   onChange,
+  onFileSelect,
+  allowMultiple = false,
+  onBulkSelect,
   maxDimension = 1000,
   quality = 0.82,
   maxSizeKB = 280,
@@ -49,9 +56,15 @@ export const UniversalImageUploader: React.FC<UniversalImageUploaderProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   const processFile = async (file: File) => {
     if (!file) return;
+    if (onFileSelect) {
+      try {
+        onFileSelect(file);
+      } catch (_) {}
+    }
     setCompressing(true);
     setErrorMsg(null);
     setStats(null);
@@ -70,21 +83,59 @@ export const UniversalImageUploader: React.FC<UniversalImageUploaderProps> = ({
         ratio: result.compressionRatio,
         format: result.format.replace('image/', '').toUpperCase(),
       });
-    } catch (err: any) {
-      console.error('Image compression failed:', err);
-      setErrorMsg(err?.message || 'फोटो प्रोसेस करने में विफलता।');
-    } finally {
       setCompressing(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    } catch (err: any) {
+      console.warn('Image compression note, falling back to direct reader:', err);
     }
+
+    // Direct fallback reader
+    try {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const raw = e.target?.result as string;
+        if (raw) {
+          onChange(raw);
+          setStats({
+            orig: formatBytes(file.size),
+            comp: formatBytes(file.size),
+            ratio: 0,
+            format: file.type.replace('image/', '').toUpperCase() || 'IMG',
+          });
+        }
+        setCompressing(false);
+      };
+      reader.onerror = () => {
+        setErrorMsg('फोटो लोड नहीं हो सकी। कृपया अन्य फोटो चुनें।');
+        setCompressing(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (readErr: any) {
+      setErrorMsg(readErr?.message || 'फोटो प्रोसेस करने में विफलता।');
+      setCompressing(false);
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (cameraInputRef.current) cameraInputRef.current.value = '';
+    }
+  };
+
+  const handleFiles = (files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    if (fileArray.length === 0) return;
+    if (allowMultiple && onBulkSelect && fileArray.length > 1) {
+      onBulkSelect(fileArray);
+      return;
+    }
+    processFile(fileArray[0]);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
     if (disabled || compressing) return;
-    const file = e.dataTransfer.files?.[0];
-    if (file) processFile(file);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFiles(e.dataTransfer.files);
+    }
   };
 
   return (
@@ -110,11 +161,24 @@ export const UniversalImageUploader: React.FC<UniversalImageUploaderProps> = ({
         )}
       </div>
 
+      {/* Hidden Gallery file input (STRICTLY NO CAPTURE: Opens device gallery/photo picker) */}
       <input
         type="file"
         ref={fileInputRef}
+        multiple={allowMultiple}
+        onChange={(e) => e.target.files && handleFiles(e.target.files)}
+        accept="image/*"
+        disabled={disabled || compressing}
+        className="hidden"
+      />
+
+      {/* Hidden Camera file input (capture="environment": Opens camera) */}
+      <input
+        type="file"
+        ref={cameraInputRef}
+        capture="environment"
         onChange={(e) => e.target.files?.[0] && processFile(e.target.files[0])}
-        accept={acceptCamera ? 'image/*;capture=camera' : 'image/*'}
+        accept="image/*"
         disabled={disabled || compressing}
         className="hidden"
       />
@@ -167,23 +231,56 @@ export const UniversalImageUploader: React.FC<UniversalImageUploaderProps> = ({
               <p className="text-[11px] text-stone-500 truncate mt-0.5 max-w-[200px] sm:max-w-xs">
                 फोटो तैयार है
               </p>
-              <p className="text-[10px] text-orange-600 font-bold mt-1 flex items-center gap-1">
-                <Camera className="w-3 h-3" />
-                <span>बदलने के लिए यहाँ क्लिक करें</span>
-              </p>
+              <div className="flex items-center gap-2 mt-1.5" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-2 py-1 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
+                >
+                  <Upload className="w-3 h-3" />
+                  <span>गैलरी से बदलें</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => cameraInputRef.current?.click()}
+                  className="px-2 py-1 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-700 border border-stone-200 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
+                >
+                  <Camera className="w-3 h-3" />
+                  <span>कैमरा</span>
+                </button>
+              </div>
             </div>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-2 gap-1.5">
             <div className="w-10 h-10 rounded-2xl bg-white border border-stone-200 text-orange-600 flex items-center justify-center shadow-xs">
-              <Camera className="w-5 h-5" />
+              <UploadCloud className="w-5 h-5 text-orange-600" />
             </div>
             <p className="text-xs font-bold text-stone-800">
-              <span className="text-orange-600 font-black underline">फोटो चुनें</span> या कैमरा से खींचें
+              गैलरी से फोटो चुनें या कैमरा से खींचें
             </p>
             <p className="text-[10px] text-stone-400">
               {helperTip || 'JPG, PNG, WebP — वेबसाइट के हिसाब से स्वतः कंप्रेस होगी ताकि जल्दी अपलोड हो'}
             </p>
+
+            <div className="flex items-center gap-2 mt-1.5" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="px-3 py-1.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>गैलरी से चुनें (Gallery)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => cameraInputRef.current?.click()}
+                className="px-3 py-1.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold text-xs flex items-center gap-1.5 border border-stone-200 transition active:scale-95 cursor-pointer"
+              >
+                <Camera className="w-3.5 h-3.5 text-stone-600" />
+                <span>कैमरा (Camera)</span>
+              </button>
+            </div>
           </div>
         )}
       </div>

@@ -960,4 +960,52 @@ export const FESTIVAL_METADATA: Record<FestivalThemeId, FestivalMetadata> = {
     culturalRegion: 'Pan-India & United Nations',
     culturalRegionHindi: 'अखिल भारतीय व संयुक्त राष्ट्र',
   },
+
+  darkblue: {
+    dates: {
+      displayDates: 'All Seasons (24x7)',
+      displayDatesHindi: 'सदाबहार (आँखों के लिए आरामदायक)',
+      approximateMonth: 'All',
+      approximateMonthHindi: 'सभी माह',
+      tithiPanchang: 'कम्फर्ट डार्क ब्लू मोड',
+      isFixedDate: true,
+      seasonHindi: 'सर्वऋतु',
+    },
+    icons: {
+      primary: '🌌🔷',
+      symbols: ['🌌', '🔷', '✨', '🌙', '⚡'],
+    },
+    localizedNames: {
+      en: 'Dark Blue Theme / Midnight Navy Mode',
+      hi: 'डार्क ब्लू थीम (शाही नेवी ब्लू व लाइट फॉन्ट)',
+      regional: 'ડાર્ક બ્લુ થીમ / டார்க் ப்ளூ',
+      regionalLanguage: 'Multi-lingual',
+    },
+    culturalRegion: 'Universal Eye-Friendly Dark UI',
+    culturalRegionHindi: 'सार्वभौमिक आरामदायक नाइट मोड',
+  },
+
+  dark_blue: {
+    dates: {
+      displayDates: 'All Seasons (24x7)',
+      displayDatesHindi: 'सदाबहार (आँखों के लिए आरामदायक)',
+      approximateMonth: 'All',
+      approximateMonthHindi: 'सभी माह',
+      tithiPanchang: 'कम्फर्ट डार्क ब्लू मोड',
+      isFixedDate: true,
+      seasonHindi: 'सर्वऋतु',
+    },
+    icons: {
+      primary: '🌌🔷',
+      symbols: ['🌌', '🔷', '✨', '🌙', '⚡'],
+    },
+    localizedNames: {
+      en: 'Dark Blue Theme / Midnight Navy Mode',
+      hi: 'डार्क ब्लू थीम (शाही नेवी ब्लू व लाइट फॉन्ट)',
+      regional: 'ડાર્ક બ્લુ થીમ / டார்க் ப்ளூ',
+      regionalLanguage: 'Multi-lingual',
+    },
+    culturalRegion: 'Universal Eye-Friendly Dark UI',
+    culturalRegionHindi: 'सार्वभौमिक आरामदायक नाइट मोड',
+  },
 };

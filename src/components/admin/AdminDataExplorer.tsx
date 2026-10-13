@@ -42,7 +42,7 @@ import {
   query,
   writeBatch,
 } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { db, handleFirestoreError, OperationType } from '../../firebase/config';
 
 interface Props {
   onSelectTab?: (tab: string) => void;
@@ -408,6 +408,7 @@ export const AdminDataExplorer: React.FC<Props> = ({
       console.error('Error fetching collection documents:', err);
       setFetchError(err?.message || 'कलेक्शन लोड करने में त्रुटि आई। कृपया अनुमतियां जांचें।');
       setDocuments([]);
+      handleFirestoreError(err, OperationType.GET, targetCollection);
     } finally {
       setLoading(false);
     }

@@ -30,8 +30,9 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, query, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../../utils/sparkQuotaGuard';
 import { FranchiseApplication, FranchiseCityReport } from '../../types';
 
 interface Props {
@@ -183,13 +184,14 @@ export const AdminFranchiseRevenueSummary: React.FC<Props> = ({ onSelectTab }) =
   const [liveCities, setLiveCities] = useState<FranchiseCityReport[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
 
-  // Fetch live applications & cities from Firestore
+  // Fetch live applications & cities from Firestore (bounded & quota-guarded)
   useEffect(() => {
     let isMounted = true;
     const loadFranchiseData = async () => {
+      if (isResourceExhausted()) return;
       setLoading(true);
       try {
-        const appsSnap = await getDocs(collection(db, 'franchise_applications'));
+        const appsSnap = await getDocs(query(collection(db, 'franchise_applications'), limit(50)));
         if (isMounted && !appsSnap.empty) {
           const apps: FranchiseApplication[] = [];
           appsSnap.forEach((doc) => {
@@ -198,7 +200,7 @@ export const AdminFranchiseRevenueSummary: React.FC<Props> = ({ onSelectTab }) =
           setLiveApplications(apps);
         }
 
-        const citiesSnap = await getDocs(collection(db, 'franchise_cities'));
+        const citiesSnap = await getDocs(query(collection(db, 'franchise_cities'), limit(50)));
         if (isMounted && !citiesSnap.empty) {
           const cities: FranchiseCityReport[] = [];
           citiesSnap.forEach((doc) => {
@@ -208,6 +210,7 @@ export const AdminFranchiseRevenueSummary: React.FC<Props> = ({ onSelectTab }) =
         }
       } catch (err) {
         console.warn('Franchise revenue Firestore sync notice:', err);
+        checkAndHandleQuotaError(err);
       } finally {
         if (isMounted) setLoading(false);
       }

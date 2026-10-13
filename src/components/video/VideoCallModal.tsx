@@ -792,7 +792,7 @@ export const VideoCallModal: React.FC<Props> = ({ session, onClose, onSendSmsInv
                     type="tel"
                     value={targetPhone.replace(/^\+91\s?/, '')}
                     onChange={(e) => setTargetPhone(e.target.value)}
-                    placeholder="9826012345"
+                    placeholder="6267546945"
                     className="w-full bg-stone-800 border border-stone-700 rounded-xl pl-12 pr-3 py-2 text-sm text-white placeholder-stone-500 focus:outline-hidden focus:border-emerald-500"
                   />
                 </div>

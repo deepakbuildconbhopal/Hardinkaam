@@ -10,8 +10,8 @@ import {
   Sparkles,
   ShieldCheck,
   Camera,
-  Image as ImageIcon,
   RefreshCw,
+  MessageCircle,
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
@@ -32,6 +32,8 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
   const [sending, setSending] = useState(false);
   const [compressingImage, setCompressingImage] = useState(false);
   const [compressionNotice, setCompressionNotice] = useState<string | null>(null);
+  const [etaMinutes, setEtaMinutes] = useState<number>(10);
+  const [showEtaPicker, setShowEtaPicker] = useState<boolean>(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatPhotoInputRef = useRef<HTMLInputElement>(null);
 
@@ -41,7 +43,12 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
     : booking.customerName || 'Customer';
   const partnerPhone = isCustomer ? booking.serviceManPhone : booking.customerPhone;
 
-  // Real-time listener for messages in this booking
+  // Mask phone number to avoid unnecessary full exposure
+  const maskedPartnerPhone = partnerPhone
+    ? partnerPhone.replace(/(\+?\d{2})?(\d{2})\d+(\d{4})/, '$1 $2•••• •$3')
+    : null;
+
+  // Real-time listener for messages in this booking (Protected by bookingId)
   useEffect(() => {
     if (!booking?.id) return;
 
@@ -82,15 +89,15 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
       ? currentUser.uid
       : isCustomer
       ? booking.customerId
-      : booking.serviceManId || 'pro_rajesh';
+      : booking.serviceManId || 'pro_serviceman';
 
     const senderName =
       userProfile?.name ||
       currentUser?.displayName ||
-      (isCustomer ? booking.customerName : booking.serviceManName || 'Technician');
+      (isCustomer ? booking.customerName || 'Customer' : booking.serviceManName || 'Technician');
 
     const receiverId = isCustomer
-      ? booking.serviceManId || 'pro_rajesh'
+      ? booking.serviceManId || 'pro_serviceman'
       : booking.customerId;
 
     try {
@@ -117,7 +124,35 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
     }
   };
 
-  // Automatically compress photo for chat transmission (under 120KB for instantaneous upload)
+  // WhatsApp click-to-chat triggered EXCLUSIVELY by explicit user click
+  const handleOpenWhatsApp = async () => {
+    if (!partnerPhone) return;
+    const cleanPhone = partnerPhone.replace(/\D/g, '');
+    const formattedPhone = cleanPhone.startsWith('91') ? cleanPhone : `91${cleanPhone}`;
+    const initialText = isCustomer
+      ? `नमस्ते, मैं HARDINKAAM बुकिंग #${booking.id} (${booking.serviceName}) के संबंध में संपर्क कर रहा हूँ।`
+      : `नमस्ते, मैं HARDINKAAM सर्विसमैन आपकी बुकिंग #${booking.id} (${booking.serviceName}) के लिए संपर्क कर रहा हूँ।`;
+
+    const waUrl = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(initialText)}`;
+
+    // User explicitly opened/tapped WhatsApp -> record log only on this user action
+    try {
+      await addDoc(collection(db, 'whatsapp_logs'), {
+        bookingId: booking.id,
+        initiatedBy: currentUser?.uid || (isCustomer ? booking.customerId : booking.serviceManId),
+        initiatorRole: isCustomer ? 'customer' : 'serviceman',
+        recipientPhone: partnerPhone,
+        openedAt: new Date().toISOString(),
+        action: 'user_opened_whatsapp_chat',
+      });
+    } catch (err) {
+      console.warn('WhatsApp log notice:', err);
+    }
+
+    window.open(waUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  // Automatically compress photo for chat transmission
   const handleChatImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -132,7 +167,6 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
       });
 
       setCompressionNotice(`ऑप्टिमाइज़्ड (${formatBytes(compressed.compressedSize)}, ${compressed.compressionRatio}% हल्का)`);
-      // Send message with compressed image
       await handleSendMessage('', compressed.dataUrl);
       setTimeout(() => setCompressionNotice(null), 3000);
     } catch (err: any) {
@@ -145,31 +179,30 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
     }
   };
 
-  const quickReplies = isCustomer
-    ? [
-        'आप कहाँ पहुँचे?',
-        'कितनी देर लगेगी?',
-        'मैं घर पर हूँ',
-        'कृपया मुझे कॉल करें',
-        'Please call when you reach the gate.',
-        'Which floor/flat do you need directions to?',
-      ]
-    : [
-        'मैं रास्ते में हूँ',
-        '5 मिनट में पहुँचूँगा',
-        'कृपया उपलब्ध रहें',
-        'मुझे आपसे बात करनी है',
-        'I have reached outside your building.',
-        'Job completed. Please check and confirm.',
-      ];
+  // Explicitly requested quick message phrases
+  const customerQuickMessages = [
+    'मैं आपका इंतजार कर रहा हूँ',
+    'आप कितनी देर में पहुँचेंगे?',
+    'कृपया पहुँचने पर कॉल करें',
+    'मैं घर पर उपलब्ध हूँ',
+    'पता / लोकेशन ढूंढने में सहायता चाहिए?',
+  ];
+
+  const servicemanQuickMessages = [
+    'मैं रास्ते में हूँ',
+    `मैं लगभग ${etaMinutes} मिनट में पहुँचूँगा`,
+    'मैं पहुँच गया हूँ',
+    'कृपया कॉल उठाएं या दरवाजा खोलें',
+    'काम शुरू करने के लिए OTP की आवश्यकता है',
+  ];
 
   return (
     <div
       id={`message-interface-${booking.id}`}
       className={`flex flex-col bg-white overflow-hidden ${
         embedded
-          ? 'rounded-2xl border border-stone-200 h-[480px]'
-          : 'rounded-3xl border border-stone-200 h-[580px] max-h-[85vh] shadow-2xl'
+          ? 'rounded-2xl border border-stone-200 h-[490px]'
+          : 'rounded-3xl border border-stone-200 h-[590px] max-h-[85vh] shadow-2xl'
       }`}
     >
       {/* Header */}
@@ -185,26 +218,44 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
               </h3>
               <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block animate-pulse" />
               <span className="text-[10px] bg-white/15 text-stone-200 px-1.5 py-0.2 rounded font-medium">
-                {isCustomer ? 'Pro' : 'Customer'}
+                {isCustomer ? 'Service Professional' : 'Customer'}
               </span>
             </div>
             <p className="text-[11px] text-stone-300 truncate">
               Booking #{booking.id} • {booking.serviceName}
+              {maskedPartnerPhone && (
+                <span className="ml-1.5 text-stone-400 font-mono">({maskedPartnerPhone})</span>
+              )}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-1.5">
           {partnerPhone && (
-            <a
-              href={`tel:${partnerPhone}`}
-              title="Call directly"
-              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors flex items-center gap-1 text-xs font-semibold"
-            >
-              <Phone className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden sm:inline">Call</span>
-            </a>
+            <>
+              {/* Direct Native Call where capability supports it */}
+              <a
+                href={`tel:${partnerPhone}`}
+                title={`Call ${partnerName}`}
+                className="p-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white transition-colors flex items-center gap-1 text-xs font-semibold shadow-xs"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Call</span>
+              </a>
+
+              {/* Explicit User-Triggered WhatsApp Chat */}
+              <button
+                type="button"
+                onClick={handleOpenWhatsApp}
+                title="Open WhatsApp Chat"
+                className="p-2 rounded-xl bg-emerald-700/80 hover:bg-emerald-700 text-white transition-colors flex items-center gap-1 text-xs font-semibold"
+              >
+                <MessageCircle className="w-3.5 h-3.5 text-emerald-300" />
+                <span className="hidden sm:inline">WhatsApp</span>
+              </button>
+            </>
           )}
+
           {onClose && (
             <button
               onClick={onClose}
@@ -216,11 +267,11 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
         </div>
       </div>
 
-      {/* Security Banner */}
+      {/* Security & Access Protection Banner */}
       <div className="bg-orange-50/70 px-3 py-1.5 border-b border-orange-100 flex items-center justify-between text-[11px] text-orange-900">
         <span className="flex items-center gap-1 font-medium">
           <ShieldCheck className="w-3.5 h-3.5 text-orange-600 flex-shrink-0" />
-          <span>HARDINKAAM Secure In-App Communication</span>
+          <span>HARDINKAAM Verified Booking Channel</span>
         </span>
         <span className="text-[10px] text-orange-700/80 font-bold uppercase tracking-wider">
           Status: {booking.status.replace(/_/g, ' ')}
@@ -230,13 +281,13 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
       {/* Messages Thread */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-stone-50/60">
         {messages.length === 0 ? (
-          <div className="text-center py-12 px-4">
+          <div className="text-center py-10 px-4">
             <div className="w-12 h-12 rounded-2xl bg-orange-100 text-orange-600 flex items-center justify-center mx-auto mb-2.5">
               <MessageSquare className="w-6 h-6" />
             </div>
             <p className="text-xs font-bold text-stone-800">Direct Chat with {partnerName}</p>
             <p className="text-[11px] text-stone-500 mt-1 max-w-xs mx-auto">
-              Coordinate arrival timings, address landmarks, or service questions in real-time.
+              Coordinate arrival timings, address landmarks, or service details in real-time.
             </p>
           </div>
         ) : (
@@ -244,8 +295,8 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
             const isMine = currentUser
               ? m.senderId === currentUser.uid
               : isCustomer
-              ? m.senderName === booking.customerName
-              : m.senderName === booking.serviceManName;
+              ? m.senderName === booking.customerName || m.senderId === booking.customerId
+              : m.senderName === booking.serviceManName || m.senderId === booking.serviceManId;
 
             return (
               <div key={m.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
@@ -298,18 +349,62 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
         <div ref={messagesEndRef} />
       </div>
 
+      {/* ServiceMan ETA minute selector (for dynamic X minutes prompt) */}
+      {!isCustomer && showEtaPicker && (
+        <div className="px-3 py-1.5 bg-amber-50 border-t border-amber-200 flex items-center justify-between text-xs">
+          <span className="font-semibold text-amber-900 text-[11px]">
+            अनुमानित समय (ETA):
+          </span>
+          <div className="flex items-center gap-1">
+            {[5, 10, 15, 20, 30].map((mins) => (
+              <button
+                key={mins}
+                type="button"
+                onClick={() => {
+                  setEtaMinutes(mins);
+                  handleSendMessage(`मैं लगभग ${mins} मिनट में पहुँचूँगा`);
+                  setShowEtaPicker(false);
+                }}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                  etaMinutes === mins
+                    ? 'bg-orange-600 text-white'
+                    : 'bg-white border border-amber-300 text-amber-900 hover:bg-amber-100'
+                }`}
+              >
+                {mins}m
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setShowEtaPicker(false)}
+              className="ml-1 text-[11px] text-stone-500 hover:text-stone-800"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Quick Responses Carousel */}
       <div className="p-2 bg-white border-t border-stone-100 overflow-x-auto flex gap-1.5 no-scrollbar">
-        {quickReplies.map((qr, idx) => (
-          <button
-            key={idx}
-            type="button"
-            onClick={() => handleSendMessage(qr)}
-            className="text-[11px] whitespace-nowrap bg-stone-100 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-300 text-stone-700 px-2.5 py-1 rounded-full border border-stone-200 transition-colors flex-shrink-0 cursor-pointer font-medium"
-          >
-            {qr}
-          </button>
-        ))}
+        {(isCustomer ? customerQuickMessages : servicemanQuickMessages).map((qr, idx) => {
+          const isEtaOption = !isCustomer && qr.includes('मिनट में पहुँचूँगा');
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => {
+                if (isEtaOption) {
+                  setShowEtaPicker(!showEtaPicker);
+                }
+                handleSendMessage(qr);
+              }}
+              className="text-[11px] whitespace-nowrap bg-stone-100 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-300 text-stone-700 px-2.5 py-1 rounded-full border border-stone-200 transition-colors flex-shrink-0 cursor-pointer font-medium"
+            >
+              {qr}
+            </button>
+          );
+        })}
       </div>
 
       {/* Status Notice (e.g. compression in progress) */}
@@ -368,3 +463,4 @@ export const MessageInterface: React.FC<Props> = ({ booking, onClose, embedded =
     </div>
   );
 };
+

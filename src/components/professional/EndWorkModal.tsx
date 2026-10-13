@@ -52,17 +52,23 @@ export const EndWorkModal: React.FC<EndWorkModalProps> = ({
       } else {
         // Fallback calculation from booking directly
         const base = Number(booking.baseAmount !== undefined ? booking.baseAmount : (booking.amount || 0));
-        const approved = (booking.extraCharges || []).filter((c) => c.status === 'approved');
-        const pending = (booking.extraCharges || []).filter((c) => c.status === 'pending');
+        const approved = (booking.extraCharges || []).filter((c) => (c.approvalStatus || c.status) === 'approved');
+        const pending = (booking.extraCharges || []).filter((c) => (c.approvalStatus || c.status) === 'pending');
         const extraServ = approved.filter((c) => c.type === 'service').reduce((s, c) => s + c.total, 0);
         const mat = approved.filter((c) => c.type === 'material' || c.type === 'other').reduce((s, c) => s + c.total, 0);
+        const approvedExtra = extraServ + mat;
+        const appCharges = Number(booking.applicableCharges !== undefined ? booking.applicableCharges : 29);
+        const disc = Number(booking.discount !== undefined ? booking.discount : (booking.discountAmount || 0));
         const pend = pending.reduce((s, c) => s + c.total, 0);
         setBreakdown({
           baseAmount: base,
+          approvedExtraChargesAmount: approvedExtra,
           extraServicesAmount: extraServ,
           materialsAmount: mat,
+          applicableCharges: appCharges,
+          discount: disc,
           pendingTotal: pend,
-          currentEstimatedFinal: base + extraServ + mat,
+          currentEstimatedFinal: Math.max(0, base + approvedExtra + appCharges - disc),
           approvedCount: approved.length,
           pendingCount: pending.length,
         });
@@ -171,20 +177,28 @@ export const EndWorkModal: React.FC<EndWorkModalProps> = ({
                     ₹{breakdown.baseAmount}
                   </span>
                 </div>
-                {breakdown.extraServicesAmount > 0 && (
-                  <div className="flex justify-between py-1.5 text-purple-900">
-                    <span>Approved Extra Services</span>
-                    <span className="font-mono font-semibold">+ ₹{breakdown.extraServicesAmount}</span>
+                {(breakdown.approvedExtraChargesAmount || (breakdown.extraServicesAmount + breakdown.materialsAmount)) > 0 && (
+                  <div className="flex justify-between py-1.5 text-amber-900">
+                    <span>Approved Extra Charges</span>
+                    <span className="font-mono font-semibold">
+                      + ₹{breakdown.approvedExtraChargesAmount ?? (breakdown.extraServicesAmount + breakdown.materialsAmount)}
+                    </span>
                   </div>
                 )}
-                {breakdown.materialsAmount > 0 && (
-                  <div className="flex justify-between py-1.5 text-blue-900">
-                    <span>Approved Materials / Parts</span>
-                    <span className="font-mono font-semibold">+ ₹{breakdown.materialsAmount}</span>
+                {(breakdown.applicableCharges ?? 0) > 0 && (
+                  <div className="flex justify-between py-1.5 text-slate-600">
+                    <span>Applicable Charges (Safety & Platform Fee)</span>
+                    <span className="font-mono font-semibold">+ ₹{breakdown.applicableCharges}</span>
+                  </div>
+                )}
+                {(breakdown.discount ?? 0) > 0 && (
+                  <div className="flex justify-between py-1.5 text-emerald-700">
+                    <span>Discount Applied</span>
+                    <span className="font-mono font-semibold">- ₹{breakdown.discount}</span>
                   </div>
                 )}
                 <div className="flex justify-between py-2 pt-3 font-bold text-slate-900 border-t border-slate-300">
-                  <span className="text-sm">Final Payable Amount</span>
+                  <span className="text-sm">Final Amount</span>
                   <span className="font-mono text-base text-emerald-700">
                     ₹{breakdown.currentEstimatedFinal}
                   </span>

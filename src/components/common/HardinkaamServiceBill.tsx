@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { BillSnapshot, Booking } from '../../types';
 import {
   ShieldCheck,
@@ -10,7 +10,11 @@ import {
   Calendar,
   CheckCircle2,
   AlertCircle,
+  FileText,
 } from 'lucide-react';
+import { FinancialDocumentModal } from './FinancialDocumentModal';
+import { createOrGetTaxInvoiceForBooking } from '../../services/documentAndRefundService';
+import { FinancialDocument } from '../../types/documents';
 
 interface HardinkaamServiceBillProps {
   bill?: BillSnapshot;
@@ -38,7 +42,7 @@ export const HardinkaamServiceBill: React.FC<HardinkaamServiceBillProps> = ({
   const serviceName = bill?.serviceName || booking?.serviceName || 'Service';
 
   const workStartedAt = bill?.workStartedAt || booking?.workStartedAt || booking?.startedAt;
-  const workEndedAt = bill?.workEndedAt || booking?.workEndedAt || booking?.completedAt;
+  const workEndedAt = bill?.workCompletedAt || bill?.workEndedAt || booking?.workCompletedAt || booking?.workEndedAt || booking?.completedAt;
   const totalDuration =
     bill?.workDurationFormatted ||
     booking?.workDurationFormatted ||
@@ -47,8 +51,16 @@ export const HardinkaamServiceBill: React.FC<HardinkaamServiceBillProps> = ({
   const baseAmount = bill?.baseAmount !== undefined ? bill.baseAmount : (booking?.baseAmount ?? booking?.amount ?? 0);
   const extraServicesAmount = bill?.extraServicesAmount ?? 0;
   const materialsAmount = bill?.materialsAmount ?? 0;
-  const platformChargeAmount = bill?.platformChargeAmount ?? Math.round(((baseAmount + extraServicesAmount + materialsAmount) * 0.15));
-  const finalAmount = bill?.finalAmount ?? booking?.finalAmount ?? booking?.amount ?? 0;
+  const approvedExtraChargesAmount = bill?.approvedExtraChargesAmount !== undefined
+    ? bill.approvedExtraChargesAmount
+    : (extraServicesAmount + materialsAmount);
+  const applicableCharges = bill?.applicableCharges !== undefined
+    ? bill.applicableCharges
+    : (booking?.applicableCharges !== undefined ? booking.applicableCharges : 29);
+  const discount = bill?.discount !== undefined
+    ? bill.discount
+    : (bill?.discountAmount ?? booking?.discount ?? booking?.discountAmount ?? 0);
+  const finalAmount = bill?.finalAmount ?? booking?.finalAmount ?? booking?.amount ?? Math.max(0, baseAmount + approvedExtraChargesAmount + applicableCharges - discount);
 
   const paymentStatus = bill?.paymentStatus || booking?.paymentStatus || 'unpaid';
   const paymentMethod = bill?.paymentMethod || booking?.paymentMethod || 'cash';
@@ -155,60 +167,66 @@ export const HardinkaamServiceBill: React.FC<HardinkaamServiceBillProps> = ({
               </div>
             </div>
 
-            {/* Extra Service Charges */}
-            {extraServicesAmount > 0 && (
+            {/* Approved Extra Charges */}
+            {approvedExtraChargesAmount > 0 && (
               <div className="p-4 flex items-center justify-between bg-amber-50/40 hover:bg-amber-50/70 transition-colors">
                 <div>
                   <div className="font-semibold text-sm text-slate-900 flex items-center gap-1.5">
-                    <span>Extra Service Charges</span>
+                    <span>Approved Extra Charges</span>
                     <span className="text-[10px] bg-amber-200 text-amber-900 font-bold px-1.5 py-0.5 rounded">
                       Customer Approved
                     </span>
                   </div>
                   <div className="text-xs text-slate-500">
-                    Additional task/labor performed during service visit
+                    {extraServicesAmount > 0 && materialsAmount > 0
+                      ? `Extra work (₹${extraServicesAmount}) + Materials/parts (₹${materialsAmount})`
+                      : extraServicesAmount > 0
+                      ? 'Additional work/service tasks authorized by customer'
+                      : 'Replacement components & supplies authorized by customer'}
                   </div>
                 </div>
                 <div className="font-mono font-semibold text-amber-900 text-sm">
-                  + ₹{extraServicesAmount.toLocaleString('en-IN')}
+                  + ₹{approvedExtraChargesAmount.toLocaleString('en-IN')}
                 </div>
               </div>
             )}
 
-            {/* Material / Parts Charges */}
-            {materialsAmount > 0 && (
-              <div className="p-4 flex items-center justify-between bg-blue-50/40 hover:bg-blue-50/70 transition-colors">
+            {/* Applicable Charges */}
+            {applicableCharges > 0 && (
+              <div className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
                 <div>
-                  <div className="font-semibold text-sm text-slate-900 flex items-center gap-1.5">
-                    <span>Material / Spare Parts Charges</span>
-                    <span className="text-[10px] bg-blue-200 text-blue-900 font-bold px-1.5 py-0.5 rounded">
-                      Customer Approved
+                  <div className="font-semibold text-sm text-slate-700">
+                    Applicable Charges
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Safety standards, platform guarantee & verified insurance protection
+                  </div>
+                </div>
+                <div className="font-mono font-semibold text-slate-700 text-sm">
+                  + ₹{applicableCharges.toLocaleString('en-IN')}
+                </div>
+              </div>
+            )}
+
+            {/* Discount if existing */}
+            {discount > 0 && (
+              <div className="p-4 flex items-center justify-between bg-emerald-50/40 hover:bg-emerald-50/70 transition-colors">
+                <div>
+                  <div className="font-semibold text-sm text-emerald-800 flex items-center gap-1.5">
+                    <span>Discount</span>
+                    <span className="text-[10px] bg-emerald-200 text-emerald-900 font-bold px-1.5 py-0.5 rounded">
+                      Special Offer
                     </span>
                   </div>
-                  <div className="text-xs text-slate-500">
-                    Replaced components, genuine supplies & materials
+                  <div className="text-xs text-emerald-600">
+                    Promotional / coupon discount deducted from final bill
                   </div>
                 </div>
-                <div className="font-mono font-semibold text-blue-900 text-sm">
-                  + ₹{materialsAmount.toLocaleString('en-IN')}
+                <div className="font-mono font-semibold text-emerald-700 text-sm">
+                  - ₹{discount.toLocaleString('en-IN')}
                 </div>
               </div>
             )}
-
-            {/* Platform / Service Charges */}
-            <div className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-              <div>
-                <div className="font-semibold text-sm text-slate-700">
-                  Applicable Platform & Service Charges
-                </div>
-                <div className="text-xs text-slate-400">
-                  Includes insurance coverage, quality assurance & safety guarantee
-                </div>
-              </div>
-              <div className="font-mono text-xs text-slate-500">
-                Included (₹{platformChargeAmount.toLocaleString('en-IN')})
-              </div>
-            </div>
           </div>
         </div>
 

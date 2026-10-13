@@ -1,6 +1,113 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <script>
+      // Filter benign Vite websocket / HMR notices in iframe preview
+      (function() {
+        if (typeof window !== 'undefined' && window.WebSocket) {
+          var RealWebSocket = window.WebSocket;
+
+          class MockHmrWebSocket extends EventTarget {
+            constructor(url, protocols) {
+              super();
+              var isHmr = false;
+              try {
+                var sUrl = String(url || '');
+                if (sUrl.indexOf('vite') !== -1 || sUrl.indexOf('run.app') !== -1 || sUrl.indexOf('localhost') !== -1 || sUrl.indexOf(':3000') !== -1) {
+                  isHmr = true;
+                }
+              } catch (err) {}
+
+              if (!isHmr) {
+                try {
+                  return Reflect.construct(RealWebSocket, [url, protocols]);
+                } catch (e) {
+                  // Fall through to mock if RealWebSocket throws
+                }
+              }
+
+              this.url = String(url);
+              this.readyState = 1; // WebSocket.OPEN
+              this.OPEN = 1;
+              this.CONNECTING = 0;
+              this.CLOSING = 2;
+              this.CLOSED = 3;
+              this.protocol = typeof protocols === 'string' ? protocols : (protocols && protocols[0]) || '';
+              this.extensions = '';
+              this.bufferedAmount = 0;
+              this.binaryType = 'blob';
+              this.onopen = null;
+              this.onclose = null;
+              this.onerror = null;
+              this.onmessage = null;
+
+              var self = this;
+              setTimeout(function() {
+                try {
+                  var openEvt = new Event('open');
+                  if (typeof self.onopen === 'function') {
+                    self.onopen(openEvt);
+                  }
+                  self.dispatchEvent(openEvt);
+                } catch (e) {}
+              }, 0);
+            }
+
+            send() {}
+            close() {
+              this.readyState = 3;
+            }
+          }
+
+          MockHmrWebSocket.CONNECTING = 0;
+          MockHmrWebSocket.OPEN = 1;
+          MockHmrWebSocket.CLOSING = 2;
+          MockHmrWebSocket.CLOSED = 3;
+
+          try {
+            window.WebSocket = MockHmrWebSocket;
+          } catch (e) {}
+        }
+
+        ['log', 'warn', 'error', 'info', 'debug'].forEach(function(method) {
+          var orig = console[method];
+          if (typeof orig !== 'function') return;
+          console[method] = function() {
+            for (var i = 0; i < arguments.length; i++) {
+              var arg = arguments[i];
+              if (typeof arg === 'string' && (arg.indexOf('[vite]') !== -1 || arg.indexOf('vite:') !== -1 || arg.indexOf('WebSocket') !== -1 || arg.indexOf('CONNECTING') !== -1 || arg.indexOf('InvalidStateError') !== -1)) {
+                return;
+              }
+              if (arg && typeof arg === 'object') {
+                var str = (arg.message || '') + ' ' + (arg.stack || '') + ' ' + (arg.name || '') + ' ' + String(arg);
+                if (str.indexOf('[vite]') !== -1 || str.indexOf('WebSocket') !== -1 || str.indexOf('CONNECTING') !== -1 || str.indexOf('InvalidStateError') !== -1) {
+                  return;
+                }
+              }
+            }
+            return orig.apply(console, arguments);
+          };
+        });
+
+        window.addEventListener('error', function(e) {
+          var msg = (e && e.message) ? e.message : (e && e.error && e.error.message ? e.error.message : '');
+          if (typeof msg === 'string' && (msg.indexOf('[vite]') !== -1 || msg.indexOf('WebSocket') !== -1 || msg.indexOf('CONNECTING') !== -1 || msg.indexOf('InvalidStateError') !== -1)) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(e) {
+          var reason = e && e.reason;
+          var msg = (reason && reason.message) ? reason.message : String(reason || '');
+          if (typeof msg === 'string' && (msg.indexOf('[vite]') !== -1 || msg.indexOf('WebSocket') !== -1 || msg.indexOf('CONNECTING') !== -1 || msg.indexOf('InvalidStateError') !== -1)) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+          }
+        }, true);
+      })();
+    </script>
+    <meta name="google-site-verification" content="IElP3vJ4YIXF25l-8YxLN33b-gU2mcGIm3RJjTsbBSE" />
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HARDINKAAM - On-Demand Home Services &amp; Verified Professionals in Bhopal</title>
@@ -18,22 +125,30 @@
     <link rel="manifest" href="/manifest.webmanifest" />
 
     <!-- Canonical & Alternate -->
-    <link rel="canonical" href="https://hardinkaam.com/" />
+    <link rel="canonical" href="https://www.hardinkaam.online/" />
+
+    <!-- Preload Critical Above-The-Fold Assets -->
+    <link rel="preload" as="image" href="/images/logo.webp" type="image/webp" />
+
+    <!-- Google Fonts for Landing Page & Branding (Consolidated Single Request) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Hind:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=Poppins:wght@400;600;800&family=Rozha+One&display=swap" rel="stylesheet">
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="HARDINKAAM" />
     <meta property="og:title" content="HARDINKAAM - On-Demand Home Services &amp; Verified Professionals in Bhopal" />
     <meta property="og:description" content="On-demand verified electrician, plumber, carpenter, painter, AC repair, and civil construction services in Bhopal by Deepak Buildcon. Instant booking &amp; transparent pricing." />
-    <meta property="og:image" content="https://hardinkaam.com/pwa-512x512.png" />
-    <meta property="og:url" content="https://hardinkaam.com/" />
+    <meta property="og:image" content="https://www.hardinkaam.online/pwa-512x512.png" />
+    <meta property="og:url" content="https://www.hardinkaam.online/" />
     <meta property="og:locale" content="hi_IN" />
 
     <!-- Twitter / X -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="HARDINKAAM - On-Demand Home Services &amp; Verified Professionals in Bhopal" />
     <meta name="twitter:description" content="On-demand verified electrician, plumber, carpenter, painter, AC repair, and civil construction services in Bhopal by Deepak Buildcon. Instant booking &amp; transparent pricing." />
-    <meta name="twitter:image" content="https://hardinkaam.com/pwa-512x512.png" />
+    <meta name="twitter:image" content="https://www.hardinkaam.online/pwa-512x512.png" />
 
     <!-- Local Bhopal Geo SEO -->
     <meta name="geo.region" content="IN-MP" />
@@ -42,7 +157,7 @@
     <meta name="ICBM" content="23.2599, 77.4126" />
 
     <!-- Google AdSense -->
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6427755582290432" crossorigin="anonymous"></script>
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1925778784615690" crossorigin="anonymous"></script>
 
     <!-- Schema.org Structured Data (JSON-LD) -->
     <script type="application/ld+json">
@@ -51,9 +166,9 @@
       "@graph": [
         {
           "@type": "WebApplication",
-          "@id": "https://hardinkaam.com/#webapp",
+          "@id": "https://www.hardinkaam.online/#webapp",
           "name": "HARDINKAAM",
-          "url": "https://hardinkaam.com",
+          "url": "https://www.hardinkaam.online",
           "applicationCategory": "LifestyleApplication",
           "operatingSystem": "Android, iOS, Web",
           "description": "Bhopal's #1 On-Demand Home & Construction Services App powered by Deepak Buildcon.",
@@ -70,12 +185,12 @@
         },
         {
           "@type": "HomeAndConstructionBusiness",
-          "@id": "https://hardinkaam.com/#business",
+          "@id": "https://www.hardinkaam.online/#business",
           "name": "HARDINKAAM - Deepak Buildcon",
-          "url": "https://hardinkaam.com",
-          "logo": "https://hardinkaam.com/pwa-512x512.png",
-          "image": "https://hardinkaam.com/pwa-512x512.png",
-          "telephone": "+91 98260 12345",
+          "url": "https://www.hardinkaam.online",
+          "logo": "https://www.hardinkaam.online/pwa-512x512.png",
+          "image": "https://www.hardinkaam.online/pwa-512x512.png",
+          "telephone": "+91 62675 46945",
           "priceRange": "₹121 - ₹25000",
           "address": {
             "@type": "PostalAddress",
@@ -111,7 +226,7 @@
         },
         {
           "@type": "FAQPage",
-          "@id": "https://hardinkaam.com/#faq",
+          "@id": "https://www.hardinkaam.online/#faq",
           "mainEntity": [
             {
               "@type": "Question",
@@ -135,8 +250,6 @@
     }
     </script>
 
-    <!-- Razorpay Standard Web Checkout -->
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 
     <style>
       /* Instant Native Splash Screen for Google Play TWA & PWA */
@@ -194,7 +307,7 @@
         100% { transform: translateX(100%); }
       }
     </style>
-  </head>
+</head>
   <body>
     <!-- Pre-Hydration TWA / PWA Splash Screen -->
     <div id="app-splash-screen">
@@ -239,6 +352,7 @@
         var splash = document.getElementById('app-splash-screen');
         if (splash) {
           splash.style.opacity = '0';
+          splash.style.pointerEvents = 'none';
           setTimeout(function() {
             if (splash && splash.parentNode) splash.remove();
           }, 350);

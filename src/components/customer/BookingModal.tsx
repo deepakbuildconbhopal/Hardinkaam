@@ -22,6 +22,9 @@ import {
   Timer,
   Award,
   Navigation,
+  ExternalLink,
+  WifiOff,
+  Database,
 } from 'lucide-react';
 import {
   addDoc,
@@ -31,9 +34,11 @@ import {
   onSnapshot,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../firebase/config';
+import { offlineBookingSyncService } from '../../services/offlineBookingSyncService';
 import { useAuth } from '../../context/AuthContext';
 import { useNotifications } from '../../context/NotificationContext';
 import { Service, ServiceMan, Booking, PaymentMethod, BookingStatus } from '../../types';
+import { razorpayClientService } from '../../services/razorpayClientService';
 import {
   LIFECYCLE_STEPS,
   CANCELLED_STATE,
@@ -43,9 +48,31 @@ import {
 } from '../../utils/bookingStateMachine';
 import { MessageInterface } from '../common/MessageInterface';
 import { ReviewSubmitForm } from './ReviewComponent';
+import {
+  notifyBookingCreated,
+  notifyBookingAccepted,
+  notifyWorkStarted,
+  notifyWorkCompleted,
+  notifyCancellation,
+} from '../../services/bookingNotificationIntegrationService';
 import { bookingOfferService } from '../../services/bookingOfferService';
 import { LazyImage } from '../common/LazyImage';
-import { processRazorpayPayment } from '../../services/razorpayService';
+import {
+  calculateIndianGst,
+  recordTaxAuditLog,
+} from '../../services/indianTaxEngineService';
+import { TaxCalculationResult } from '../../types/tax';
+import {
+  getCustomerRewardWallet,
+  getRewardSettings,
+  validateRewardRedemption,
+  reserveRewardPoints,
+  finalizePointRedemption,
+  releaseRewardPoints,
+  reverseRewardRedemption,
+  CustomerRewardWallet,
+  RewardSettings,
+} from '../../services/rewardService';
 import { AuthModal } from '../auth/AuthModal';
 import { DeliveryOtpPrompt } from './DeliveryOtpPrompt';
 import { RescheduleModal } from './RescheduleModal';
@@ -118,12 +145,52 @@ export const BookingModal: React.FC<Props> = ({
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [paymentFailureInfo, setPaymentFailureInfo] = useState<{
+    code?: string;
+    reason?: string;
+    description: string;
+    orderId?: string;
+  } | null>(null);
 
   // State machine transition dialog state
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('Change of plans');
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [rescheduleModalOpen, setRescheduleModalOpen] = useState(false);
+
+  // Reward Points Redemption State
+  const [rewardWallet, setRewardWallet] = useState<CustomerRewardWallet | null>(null);
+  const [rewardSettings, setRewardSettings] = useState<RewardSettings | null>(null);
+  const [isUsingRewards, setIsUsingRewards] = useState(false);
+  const [pointsToRedeemInput, setPointsToRedeemInput] = useState<string>('');
+  const [rewardError, setRewardError] = useState<string | null>(null);
+
+  // Load reward wallet and settings on modal open
+  useEffect(() => {
+    if (!isOpen || !currentUser?.uid) return;
+    let isMounted = true;
+    const fetchRewards = async () => {
+      try {
+        const [w, s] = await Promise.all([
+          getCustomerRewardWallet(currentUser.uid),
+          getRewardSettings(),
+        ]);
+        if (isMounted) {
+          setRewardWallet(w);
+          setRewardSettings(s);
+          setIsUsingRewards(false);
+          setPointsToRedeemInput('');
+          setRewardError(null);
+        }
+      } catch (err) {
+        console.warn('Notice fetching reward wallet:', err);
+      }
+    };
+    fetchRewards();
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, currentUser?.uid]);
 
   // Sync state if existingBooking prop changes
   useEffect(() => {
@@ -177,8 +244,43 @@ export const BookingModal: React.FC<Props> = ({
       : autoSelectedPro;
 
   const basePrice = service ? service.basePrice : activeBooking?.amount || 299;
-  const gst = Math.round(basePrice * 0.18);
-  const totalAmount = basePrice + gst;
+  const otherDiscount = 0; // Other configured discounts
+
+  // Authoritative available reward points & limits
+  const availableRewardPoints = rewardWallet
+    ? (rewardWallet.pointsBalance !== undefined ? rewardWallet.pointsBalance : (rewardWallet.availablePoints || 0))
+    : 0;
+  const conversionRate = rewardSettings?.pointsToRupeeConversion || 10;
+  const maxDiscountPercentage = rewardSettings?.maxBookingDiscountPercent || 50;
+  const maxDiscountRupees = Math.floor(basePrice * (maxDiscountPercentage / 100));
+  const maxPointsByPercentage = maxDiscountRupees * conversionRate;
+  const maxAllowedPoints = Math.min(
+    availableRewardPoints,
+    rewardSettings?.maxPointsUsablePerBooking || 5000,
+    maxPointsByPercentage
+  );
+
+  const parsedPointsInput = parseInt(pointsToRedeemInput) || 0;
+  const effectivePointsToUse = isUsingRewards
+    ? Math.max(0, Math.min(parsedPointsInput, maxAllowedPoints))
+    : 0;
+  const rewardDiscount = Math.round(effectivePointsToUse / conversionRate);
+
+  const taxCalculation = React.useMemo<TaxCalculationResult>(() => {
+    return calculateIndianGst({
+      basePrice,
+      standardDiscount: otherDiscount,
+      rewardPointsDiscount: rewardDiscount,
+      serviceCategoryId: service?.categoryId,
+      serviceId: service?.id,
+      serviceName: service?.name,
+      customerPincode: pincode,
+    });
+  }, [basePrice, otherDiscount, rewardDiscount, service, pincode]);
+
+  const taxableBase = taxCalculation.taxableAmount;
+  const gst = taxCalculation.totalTaxAmount;
+  const totalAmount = taxCalculation.finalTotalAmount;
 
   const TIME_SLOTS = [
     '09:00 AM - 11:00 AM',
@@ -201,33 +303,30 @@ export const BookingModal: React.FC<Props> = ({
         ...customPayload,
       });
 
-      // Send notifications for important state shifts
-      if (nextStatus === 'accepted' && activeBooking.customerId) {
-        await sendNotification({
-          userId: activeBooking.customerId,
-          title: 'Booking Accepted! 🛠️',
-          message: `${activeBooking.serviceManName || 'Your pro'} has accepted booking #${
-            activeBooking.id
-          }. Scheduled for ${activeBooking.scheduledDate} (${activeBooking.scheduledTime}).`,
-          type: 'booking',
-          link: activeBooking.id,
-        });
-      } else if (nextStatus === 'in_progress' && activeBooking.customerId) {
-        await sendNotification({
-          userId: activeBooking.customerId,
-          title: 'Service Started ⚡',
-          message: `Work on #${activeBooking.id} (${activeBooking.serviceName}) is now in progress.`,
-          type: 'booking',
-          link: activeBooking.id,
-        });
-      } else if (nextStatus === 'completed' && activeBooking.customerId) {
-        await sendNotification({
-          userId: activeBooking.customerId,
-          title: 'Service Completed! ⭐',
-          message: `Booking #${activeBooking.id} has been marked complete. Please share your rating and review.`,
-          type: 'booking',
-          link: activeBooking.id,
-        });
+      // Send deduplicated notifications for important state shifts
+      if (nextStatus === 'accepted') {
+        await notifyBookingAccepted(
+          activeBooking,
+          activeBooking.serviceManName || 'Your pro'
+        );
+      } else if (nextStatus === 'in_progress') {
+        await notifyWorkStarted(activeBooking);
+      } else if (nextStatus === 'completed') {
+        await notifyWorkCompleted(activeBooking, activeBooking.finalAmount || activeBooking.amount);
+      } else if (nextStatus === 'cancelled') {
+        // Reverse redeemed reward points if any were used on this booking
+        if ((activeBooking as any).rewardPointsUsed && (activeBooking as any).rewardPointsUsed > 0 && activeBooking.customerId) {
+          reverseRewardRedemption(
+            activeBooking.customerId,
+            activeBooking.id,
+            customPayload?.reason || cancelReason || 'Booking cancelled / refunded'
+          ).catch((e) => console.warn('Reward reversal notice:', e));
+        }
+        await notifyCancellation(
+          activeBooking,
+          activeRole,
+          customPayload?.reason || cancelReason || 'Booking cancelled'
+        );
       }
 
       setCancelModalOpen(false);
@@ -240,7 +339,7 @@ export const BookingModal: React.FC<Props> = ({
   };
 
   // ================= BOOKING CREATION SUBMISSION =================
-  const handleConfirmBooking = async () => {
+  const handleConfirmBooking = async (overrideMethod?: PaymentMethod) => {
     if (!service || loading) return;
 
     if (!currentUser) {
@@ -265,11 +364,46 @@ export const BookingModal: React.FC<Props> = ({
       return;
     }
 
+    const cleanOverrideMethod = typeof overrideMethod === 'string' ? overrideMethod : undefined;
+    const effectivePaymentMethod = cleanOverrideMethod || paymentMethod;
+    if (cleanOverrideMethod) {
+      setPaymentMethod(cleanOverrideMethod);
+    }
+
     setLoading(true);
     setError(null);
+    setPaymentFailureInfo(null);
 
     const bookingId = 'BK_' + Math.random().toString(36).substring(2, 9).toUpperCase();
     const nowIso = new Date().toISOString();
+
+    // Validate & Reserve Reward Points if customer chose to redeem
+    if (isUsingRewards && effectivePointsToUse > 0) {
+      const validation = await validateRewardRedemption({
+        customerId: currentUser.uid,
+        pointsToRedeem: effectivePointsToUse,
+        baseServiceAmount: basePrice,
+      });
+
+      if (!validation.isValid) {
+        setError(validation.error || 'Reward points redemption validation failed.');
+        setLoading(false);
+        return;
+      }
+
+      const reserveResult = await reserveRewardPoints(
+        currentUser.uid,
+        effectivePointsToUse,
+        bookingId,
+        basePrice
+      );
+
+      if (!reserveResult.success) {
+        setError(reserveResult.error || 'Failed to reserve reward points. Please retry.');
+        setLoading(false);
+        return;
+      }
+    }
 
     const gross = totalAmount;
     const companyComm = Math.round(gross * 0.15); // 15% company service charge
@@ -297,22 +431,32 @@ export const BookingModal: React.FC<Props> = ({
       notes: notes.trim(),
       amount: totalAmount,
       status: 'pending',
-      paymentStatus: paymentMethod === 'cash' ? 'cod' : 'paid',
-      paymentMethod,
+      paymentStatus: effectivePaymentMethod === 'cash' ? 'cod' : 'paid',
+      paymentMethod: effectivePaymentMethod,
       companyCommission: companyComm,
       taxDeduction: taxDed,
+      taxRate: taxCalculation.gstRatePercent,
+      taxCalculation: taxCalculation as any,
+      sacCode: taxCalculation.sacCode,
+      gstAmount: gst,
+      statutoryTaxLiability: taxCalculation.statutoryTaxLiability,
       servicemanPayoutAmount: proPayout,
       payoutStatus: 'pending',
       isReviewed: false,
       createdAt: nowIso,
       updatedAt: nowIso,
+      ...(isUsingRewards && effectivePointsToUse > 0 ? {
+        rewardPointsUsed: effectivePointsToUse,
+        rewardDiscountUsed: rewardDiscount,
+      } as any : {}),
     };
 
     const proceedWithFirestoreBooking = async (razorpayMeta?: { order_id: string; payment_id: string; signature: string }) => {
       try {
         const finalBooking: Booking = {
           ...newBooking,
-          paymentStatus: razorpayMeta ? 'paid' : (paymentMethod === 'cash' ? 'cod' : 'paid'),
+          paymentMethod: effectivePaymentMethod,
+          paymentStatus: razorpayMeta ? 'paid' : (effectivePaymentMethod === 'cash' ? 'cod' : 'paid'),
           ...(razorpayMeta ? {
             razorpayOrderId: razorpayMeta.order_id,
             razorpayPaymentId: razorpayMeta.payment_id,
@@ -320,9 +464,78 @@ export const BookingModal: React.FC<Props> = ({
           } : {})
         };
 
+        const isDeviceOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+        // If offline: save to IndexedDB Pending Synchronization queue
+        if (isDeviceOffline) {
+          const offlineItem = await offlineBookingSyncService.savePendingBooking(finalBooking, {
+            taxCalculation,
+            customerPhone,
+            customerName,
+            scheduledDate,
+            scheduledTime,
+            serviceName: service.name,
+            totalAmount,
+            effectivePaymentMethod,
+            source: 'booking_modal',
+          });
+
+          if (onBookingSuccess) {
+            onBookingSuccess(offlineItem.booking);
+          }
+          setActiveBooking(offlineItem.booking);
+          setActiveTab('lifecycle');
+          return;
+        }
+
         // 1. Save to Firestore bookings collection
-        const bookingDocRef = doc(db, 'bookings', bookingId);
-        await setDoc(bookingDocRef, finalBooking);
+        try {
+          const bookingDocRef = doc(db, 'bookings', bookingId);
+          await setDoc(bookingDocRef, finalBooking);
+        } catch (firestoreWriteErr: any) {
+          const isNetworkError =
+            !navigator.onLine ||
+            firestoreWriteErr?.code === 'unavailable' ||
+            firestoreWriteErr?.message?.includes('offline') ||
+            firestoreWriteErr?.message?.includes('network') ||
+            firestoreWriteErr?.message?.includes('Failed to fetch');
+
+          if (isNetworkError) {
+            console.warn('[BookingModal] Firestore network write failed; queueing in IndexedDB Pending Synchronization queue:', firestoreWriteErr);
+            const offlineItem = await offlineBookingSyncService.savePendingBooking(finalBooking, {
+              taxCalculation,
+              customerPhone,
+              customerName,
+              scheduledDate,
+              scheduledTime,
+              serviceName: service.name,
+              totalAmount,
+              effectivePaymentMethod,
+              source: 'booking_modal',
+            });
+
+            if (onBookingSuccess) {
+              onBookingSuccess(offlineItem.booking);
+            }
+            setActiveBooking(offlineItem.booking);
+            setActiveTab('lifecycle');
+            return;
+          }
+          throw firestoreWriteErr;
+        }
+
+        // Record statutory tax calculation audit log
+        recordTaxAuditLog(bookingId, taxCalculation, {
+          customerId: currentUser.uid,
+          serviceManId: newBooking.serviceManId,
+        }).catch((err) => console.warn('Non-fatal tax audit log record:', err));
+
+        // Finalize reward points redemption now that booking is confirmed
+        if (isUsingRewards && effectivePointsToUse > 0) {
+          await finalizePointRedemption(currentUser.uid, bookingId);
+          // Refresh local reward wallet
+          getCustomerRewardWallet(currentUser.uid).then((updatedW) => setRewardWallet(updatedW)).catch(() => {});
+        }
 
         // Create actionable booking offers for eligible Service Professionals
         bookingOfferService.createBookingOffersForBooking(finalBooking).catch((err) => {
@@ -350,16 +563,8 @@ export const BookingModal: React.FC<Props> = ({
           console.warn('WhatsApp log notice:', e);
         }
 
-        // 3. In-app notification
-        if (currentUser) {
-          await sendNotification({
-            userId: currentUser.uid,
-            title: 'Booking Confirmed: ' + service.name,
-            message: `Booking #${bookingId} is scheduled for ${scheduledDate} at ${scheduledTime}. Pro: ${newBooking.serviceManName}.${razorpayMeta ? ' Online payment verified.' : ''}`,
-            type: 'booking',
-            link: bookingId,
-          });
-        }
+        // 3. Deduplicated booking created in-app notifications
+        await notifyBookingCreated(finalBooking);
 
         // 4. Audit log
         try {
@@ -367,7 +572,7 @@ export const BookingModal: React.FC<Props> = ({
             userId: currentUser?.uid || 'guest',
             userEmail: currentUser?.email || customerPhone,
             action: 'create_booking',
-            details: `Booking ${bookingId} created for ${service.name} (₹${totalAmount}) [Method: ${paymentMethod}]`,
+            details: `Booking ${bookingId} created for ${service.name} (₹${totalAmount}) [Method: ${effectivePaymentMethod}]`,
             timestamp: nowIso,
           });
         } catch (e) {
@@ -389,43 +594,76 @@ export const BookingModal: React.FC<Props> = ({
       }
     };
 
-    if (paymentMethod === 'razorpay') {
+    const isOnline = effectivePaymentMethod === 'razorpay' || effectivePaymentMethod === 'upi';
+
+    if (isOnline) {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setError('आप वर्तमान में ऑफ़लाइन हैं। ऑनलाइन भुगतान के लिए इंटरनेट कनेक्शन आवश्यक है। कृपया "Pay Cash After Service (COD)" चुनें या इंटरनेट कनेक्ट करें।');
+        setLoading(false);
+        return;
+      }
       try {
-        await processRazorpayPayment({
-          amount: totalAmount,
-          currency: 'INR',
+        const digitsOnly = customerPhone.replace(/\D/g, '');
+        const cleanPhone = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : (digitsOnly || undefined);
+        const cleanEmail = currentUser.email && currentUser.email.includes('@') ? currentUser.email.trim() : undefined;
+
+        // Pre-persist pending booking to guarantee server-side commission attribution resolution
+        await setDoc(doc(db, 'bookings', bookingId), {
+          ...newBooking,
+          paymentMethod: 'razorpay',
+          paymentStatus: 'pending',
+          status: 'pending',
+          paymentDestination: 'hardinkaam_admin_razorpay',
+        }, { merge: true });
+
+        const idToken = await currentUser.getIdToken(true);
+        await razorpayClientService.openCheckout({
+          purpose: 'service_booking',
+          referenceId: bookingId,
+          idToken,
           name: 'HARDINKAAM Service Booking',
-          description: `${service.name} Booking (#${bookingId})`,
-          receipt: `bk_${bookingId}`,
+          description: `Booking #${bookingId} for ${service.name}`,
           prefill: {
             name: customerName,
-            email: currentUser.email || '',
-            contact: customerPhone,
+            email: cleanEmail,
+            contact: cleanPhone,
           },
-          notes: {
-            bookingId,
-            serviceId: service.id,
-            serviceName: service.name,
-          },
-          onSuccess: async (res) => {
+          onSuccess: async (verifyResult) => {
             await proceedWithFirestoreBooking({
-              order_id: res.order_id,
-              payment_id: res.payment_id,
-              signature: res.signature,
+              order_id: verifyResult.orderId,
+              payment_id: verifyResult.paymentId,
+              signature: verifyResult.signature,
             });
           },
           onFailure: (err) => {
-            console.error('Razorpay payment failed in booking modal:', err);
-            setError(err.description || err.reason || 'Payment failed or declined. Please choose COD or retry.');
+            if (isUsingRewards && effectivePointsToUse > 0) {
+              releaseRewardPoints(currentUser.uid, bookingId, err?.message || 'Razorpay checkout failed').catch(() => {});
+            }
+            setError(err.message || 'Could not complete Razorpay checkout.');
             setLoading(false);
-          },
-          onDismiss: () => {
-            setLoading(false);
-          },
+          }
         });
+        return;
       } catch (payErr: any) {
-        console.error('Razorpay initiate error:', payErr);
-        setError(payErr.message || 'Could not initiate Razorpay checkout.');
+        console.warn('Razorpay initiate notice:', payErr?.message || payErr);
+        if (isUsingRewards && effectivePointsToUse > 0) {
+          releaseRewardPoints(currentUser.uid, bookingId, 'Razorpay init error').catch(() => {});
+        }
+        const isAuthError =
+          payErr?.message?.toLowerCase().includes('authentication') ||
+          payErr?.message?.toLowerCase().includes('credential') ||
+          payErr?.message?.toLowerCase().includes('key');
+
+        const friendlyMsg = isAuthError
+          ? 'ऑनलाइन पेमेंट गेटवे प्रमाणीकरण लंबित है। आप अभी "Pay Cash After Service (COD)" चुनकर बिना किसी रुकावट के अपनी बुकिंग पूरी कर सकते हैं।'
+          : (payErr.message || 'Could not initiate Razorpay checkout.');
+
+        setPaymentFailureInfo({
+          code: isAuthError ? 'GATEWAY_CREDENTIALS_PENDING' : 'INIT_FAILED',
+          reason: isAuthError ? 'gateway_credentials_pending' : 'init_failed',
+          description: friendlyMsg,
+        });
+        setError(friendlyMsg);
         setLoading(false);
       }
     } else {
@@ -995,7 +1233,63 @@ export const BookingModal: React.FC<Props> = ({
 
         {/* Body Content */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
-          {error && (
+          {paymentFailureInfo ? (
+            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 text-xs space-y-3 shadow-xs animate-in fade-in">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div className="font-bold text-amber-950 text-sm">
+                    Online Payment Verification Issue
+                  </div>
+                  <p className="text-amber-800 leading-relaxed">
+                    {paymentFailureInfo.description}
+                  </p>
+                  {paymentFailureInfo.orderId && (
+                    <div className="text-[10px] text-amber-700 font-mono bg-amber-100/90 px-2 py-0.5 rounded inline-block">
+                      Razorpay Order Ref: {paymentFailureInfo.orderId}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-amber-200/90 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => handleConfirmBooking('cash')}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors disabled:opacity-60"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>{loading ? 'Confirming...' : 'Book with Pay Cash After Service (COD)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => {
+                    setPaymentFailureInfo(null);
+                    setError(null);
+                    setPaymentMethod('upi');
+                  }}
+                  className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors disabled:opacity-60"
+                >
+                  <span>Switch to UPI on Delivery</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaymentFailureInfo(null);
+                    setError(null);
+                    setPaymentMethod('cash');
+                  }}
+                  className="px-3 py-2 rounded-xl bg-stone-200 hover:bg-stone-300 text-stone-800 font-bold text-xs cursor-pointer transition-colors"
+                >
+                  <span>Pay Cash (COD)</span>
+                </button>
+              </div>
+            </div>
+          ) : error && (
             <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
               <AlertCircle className="w-4 h-4 flex-shrink-0" />
               <span>{error}</span>
@@ -1290,6 +1584,115 @@ export const BookingModal: React.FC<Props> = ({
           {/* STEP 4: Payment Method & Confirmation */}
           {step === 4 && (
             <div className="space-y-4">
+              {/* Reward Points Redemption Section */}
+              {rewardSettings?.enabled !== false && (
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/90 space-y-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold">
+                        <Award className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider block">
+                          Available Reward Points
+                        </span>
+                        <span className="font-extrabold text-stone-900 text-sm">
+                          {availableRewardPoints} Points{' '}
+                          <span className="text-amber-700 text-xs font-semibold">
+                            (₹{Math.round((availableRewardPoints / conversionRate) * 10) / 10} value)
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <span className="font-bold text-xs text-stone-800">Use Reward Points</span>
+                      <input
+                        type="checkbox"
+                        checked={isUsingRewards}
+                        disabled={availableRewardPoints < (rewardSettings?.minPointsForRedemption || 100) || maxAllowedPoints <= 0}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setIsUsingRewards(checked);
+                          if (checked && !pointsToRedeemInput) {
+                            setPointsToRedeemInput(String(maxAllowedPoints));
+                          }
+                          setRewardError(null);
+                        }}
+                        className="w-4 h-4 accent-orange-600 rounded cursor-pointer"
+                      />
+                    </label>
+                  </div>
+
+                  {/* If user enabled rewards, show interactive input controls */}
+                  {isUsingRewards && (
+                    <div className="pt-2 border-t border-amber-200/60 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex-1">
+                          <label className="text-[11px] font-bold text-stone-700 block mb-1">
+                            Enter Points to Redeem (Max {maxAllowedPoints} Pts allowed for this booking)
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min="1"
+                              max={maxAllowedPoints}
+                              value={pointsToRedeemInput}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setPointsToRedeemInput(val);
+                                const num = parseInt(val) || 0;
+                                if (num > maxAllowedPoints) {
+                                  setRewardError(`Max points allowed for this booking is ${maxAllowedPoints}.`);
+                                } else if (num > availableRewardPoints) {
+                                  setRewardError(`Insufficient balance. You have ${availableRewardPoints} points.`);
+                                } else {
+                                  setRewardError(null);
+                                }
+                              }}
+                              placeholder={`e.g. ${maxAllowedPoints}`}
+                              className="w-full px-3 py-2 rounded-xl bg-white border border-amber-300 font-bold text-xs focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPointsToRedeemInput(String(maxAllowedPoints));
+                                setRewardError(null);
+                              }}
+                              className="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-[11px] transition-colors whitespace-nowrap cursor-pointer shrink-0 shadow-xs"
+                            >
+                              Max Points
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {rewardError ? (
+                        <div className="text-[11px] text-rose-700 font-semibold flex items-center gap-1 mt-1">
+                          <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                          <span>{rewardError}</span>
+                        </div>
+                      ) : effectivePointsToUse > 0 ? (
+                        <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold flex items-center justify-between">
+                          <span>🎁 Reward Points Discount Applied:</span>
+                          <span className="text-emerald-700 font-extrabold">-₹{rewardDiscount}</span>
+                        </div>
+                      ) : null}
+
+                      <p className="text-[10px] text-stone-500 italic">
+                        Conversion: {conversionRate} Points = ₹1. Up to {maxDiscountPercentage}% of service can be paid via reward points.
+                      </p>
+                    </div>
+                  )}
+
+                  {availableRewardPoints < (rewardSettings?.minPointsForRedemption || 100) && (
+                    <p className="text-[10px] text-stone-500">
+                      Minimum {rewardSettings?.minPointsForRedemption || 100} points required to redeem on bookings.
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Order Summary Box */}
               <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200 space-y-2 text-xs">
                 <span className="text-[10px] uppercase font-bold text-stone-400 block">
@@ -1299,15 +1702,56 @@ export const BookingModal: React.FC<Props> = ({
                   <span className="font-bold">{service.name}</span>
                   <span>₹{basePrice}</span>
                 </div>
-                <div className="flex justify-between text-stone-500 text-[11px]">
-                  <span>GST Tax (18%):</span>
-                  <span>₹{gst}</span>
+
+                {otherDiscount > 0 && (
+                  <div className="flex justify-between text-emerald-700 font-semibold">
+                    <span>Other Discount:</span>
+                    <span>-₹{otherDiscount}</span>
+                  </div>
+                )}
+
+                {rewardDiscount > 0 && (
+                  <div className="flex justify-between text-amber-700 font-bold">
+                    <span>Reward Points Discount ({effectivePointsToUse} Pts):</span>
+                    <span>-₹{rewardDiscount}</span>
+                  </div>
+                )}
+
+                <div className="flex justify-between text-stone-600 text-[11px] font-medium">
+                  <span>
+                    GST Tax (SAC {taxCalculation.sacCode} - {taxCalculation.gstRatePercent}%):
+                  </span>
+                  <span className="font-semibold text-stone-800">₹{gst}</span>
                 </div>
+                {taxCalculation.isInterState ? (
+                  <div className="flex justify-between text-stone-400 text-[10px] pl-2">
+                    <span>IGST ({taxCalculation.igstPercent}%):</span>
+                    <span>₹{taxCalculation.igstAmount}</span>
+                  </div>
+                ) : (
+                  <div className="flex justify-between text-stone-400 text-[10px] pl-2">
+                    <span>CGST ({taxCalculation.cgstPercent}%): ₹{taxCalculation.cgstAmount}</span>
+                    <span>SGST ({taxCalculation.sgstPercent}%): ₹{taxCalculation.sgstAmount}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-stone-900 font-extrabold text-sm pt-2 border-t border-stone-200">
-                  <span>Total Due:</span>
+                  <span>Final Payable Amount:</span>
                   <span className="text-orange-600">₹{totalAmount}</span>
                 </div>
               </div>
+
+              {/* Offline Advisory Notice if navigator is offline */}
+              {typeof navigator !== 'undefined' && !navigator.onLine && (
+                <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 text-xs space-y-1.5 shadow-xs">
+                  <div className="flex items-center gap-2 font-bold text-amber-950">
+                    <WifiOff className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span>ऑफ़लाइन मोड सक्रिय (Offline Booking Mode)</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-amber-800">
+                    इंटरनेट कनेक्शन उपलब्ध नहीं है। आपकी बुकिंग डिवाइस के सुरक्षित <strong>IndexedDB (Pending Synchronization Queue)</strong> में सहेजी जाएगी। ऑनलाइन होते ही यह स्वचालित रूप से Firestore पर सिंक होगी। ऑफ़लाइन में &quot;Pay Cash After Service&quot; समर्थित है।
+                  </p>
+                </div>
+              )}
 
               {/* Payment Methods */}
               <div>
@@ -1315,41 +1759,6 @@ export const BookingModal: React.FC<Props> = ({
                   Select Payment Method
                 </label>
                 <div className="space-y-2">
-                  <label
-                    onClick={() => setPaymentMethod('razorpay')}
-                    className={`flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all ${
-                      paymentMethod === 'razorpay'
-                        ? 'border-orange-600 bg-orange-50/50 shadow-xs ring-2 ring-orange-500/20'
-                        : 'border-stone-200 hover:border-stone-300'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-xl bg-orange-100 text-orange-700 flex items-center justify-center font-bold text-xs">
-                        <CreditCard className="w-4 h-4 text-orange-600" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-bold text-stone-900 block">
-                            Razorpay Standard Checkout
-                          </span>
-                          <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800">
-                            Prepaid
-                          </span>
-                        </div>
-                        <span className="text-[11px] text-stone-500">
-                          Instant UPI (GPay, PhonePe, Paytm), Debit/Credit Cards & NetBanking
-                        </span>
-                      </div>
-                    </div>
-                    <input
-                      type="radio"
-                      name="payMethod"
-                      checked={paymentMethod === 'razorpay'}
-                      onChange={() => setPaymentMethod('razorpay')}
-                      className="text-orange-600"
-                    />
-                  </label>
-
                   <label
                     onClick={() => setPaymentMethod('cash')}
                     className={`flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all ${
@@ -1367,7 +1776,7 @@ export const BookingModal: React.FC<Props> = ({
                           Pay Cash After Service (COD)
                         </span>
                         <span className="text-[11px] text-stone-500">
-                          Inspect work and pay technician directly
+                          Inspect work and pay cash to technician after service is completed
                         </span>
                       </div>
                     </div>
@@ -1384,7 +1793,7 @@ export const BookingModal: React.FC<Props> = ({
                     onClick={() => setPaymentMethod('upi')}
                     className={`flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all ${
                       paymentMethod === 'upi'
-                        ? 'border-orange-600 bg-orange-50/50 shadow-xs'
+                        ? 'border-orange-600 bg-orange-50/50 shadow-xs ring-2 ring-orange-500/20'
                         : 'border-stone-200 hover:border-stone-300'
                     }`}
                   >
@@ -1393,11 +1802,16 @@ export const BookingModal: React.FC<Props> = ({
                         UPI
                       </div>
                       <div>
-                        <span className="text-xs font-bold text-stone-900 block">
-                          UPI on Delivery / QR
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-stone-900 block">
+                            Direct UPI / Cash on Delivery
+                          </span>
+                          <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-blue-100 text-blue-800">
+                            GPay / PhonePe / QR
+                          </span>
+                        </div>
                         <span className="text-[11px] text-stone-500">
-                          Scan technician's verified QR code upon service completion
+                          Fast &amp; verified UPI payment directly to technician
                         </span>
                       </div>
                     </div>
@@ -1456,26 +1870,12 @@ export const BookingModal: React.FC<Props> = ({
               type="button"
               id="booking-confirm-pay-btn"
               disabled={loading}
-              onClick={handleConfirmBooking}
-              className={`px-6 py-2.5 rounded-xl text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md disabled:opacity-60 ${
-                paymentMethod === 'razorpay'
-                  ? 'bg-orange-600 hover:bg-orange-700 shadow-orange-600/20'
-                  : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
-              }`}
+              onClick={() => handleConfirmBooking()}
+              className="px-6 py-2.5 rounded-xl text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20 disabled:opacity-60"
             >
-              {paymentMethod === 'razorpay' ? (
-                <CreditCard className="w-4 h-4" />
-              ) : (
-                <CheckCircle2 className="w-4 h-4" />
-              )}
+              <CheckCircle2 className="w-4 h-4" />
               <span>
-                {loading
-                  ? paymentMethod === 'razorpay'
-                    ? 'Opening Razorpay...'
-                    : 'Confirming...'
-                  : paymentMethod === 'razorpay'
-                  ? `Pay ₹${totalAmount} with Razorpay`
-                  : `Confirm & Book (₹${totalAmount})`}
+                {loading ? 'Confirming...' : `Confirm & Book (₹${totalAmount})`}
               </span>
             </button>
           )}

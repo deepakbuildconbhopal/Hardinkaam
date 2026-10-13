@@ -391,7 +391,7 @@ export const FranchiseCityCalculator: React.FC<Props> = ({
 मैं इस शहर के लिए हार्डिनकाम फ्रेंचाइज़ी अनुबंध पर आगे चर्चा करना चाहता हूँ। कृपया मुझे विस्तृत मार्गदर्शन प्रदान करें।`;
 
     const encoded = encodeURIComponent(text);
-    const url = `https://wa.me/919826012345?text=${encoded}`;
+    const url = `https://wa.me/916267546945?text=${encoded}`;
     window.open(url, '_blank');
   };
 

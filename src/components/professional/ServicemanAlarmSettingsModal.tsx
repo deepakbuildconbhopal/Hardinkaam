@@ -13,12 +13,16 @@ import {
   Info,
   Radio,
   Sparkles,
+  Send,
+  Unlock,
 } from 'lucide-react';
 import {
   servicemanAlarmSettingsService,
   ServicemanAlarmPersonalSettings,
 } from '../../services/servicemanAlarmSettingsService';
 import { bookingAlarmSoundService } from '../../services/bookingAlarmSoundService';
+import { useNotifications } from '../../context/NotificationContext';
+import { BrowserNotificationUnblockModal } from '../common/BrowserNotificationUnblockModal';
 
 interface Props {
   isOpen: boolean;
@@ -31,6 +35,7 @@ export const ServicemanAlarmSettingsModal: React.FC<Props> = ({
   onClose,
   onSimulateTestBooking,
 }) => {
+  const { enablePushNotifications, sendTestPush, isPushSubscribed } = useNotifications();
   const [settings, setSettings] = useState<ServicemanAlarmPersonalSettings>(() =>
     servicemanAlarmSettingsService.getPersonalSettings()
   );
@@ -38,7 +43,10 @@ export const ServicemanAlarmSettingsModal: React.FC<Props> = ({
     'default'
   );
   const [isPlayingTest, setIsPlayingTest] = useState<boolean>(false);
+  const [isSendingPushTest, setIsSendingPushTest] = useState<boolean>(false);
+  const [pushTestResult, setPushTestResult] = useState<string | null>(null);
   const [savedToast, setSavedToast] = useState<boolean>(false);
+  const [isUnblockModalOpen, setIsUnblockModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -269,17 +277,34 @@ export const ServicemanAlarmSettingsModal: React.FC<Props> = ({
               ऐप बैकग्राउंड में होने पर भी नया बुकिंग अलर्ट प्राप्त करने के लिए नोटिफिकेशन अनुमति दें।
             </p>
 
-            {permissionStatus !== 'granted' && (
-              <button
-                type="button"
-                id="btn-request-notification-permission"
-                onClick={handleRequestPermission}
-                className="w-full py-2 px-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
-              >
-                <Bell className="w-3.5 h-3.5" />
-                <span>सूचनाएं चालू करें (Enable Notifications)</span>
-              </button>
-            )}
+            <div className="flex gap-2">
+              {permissionStatus === 'denied' ? (
+                <button
+                  type="button"
+                  id="btn-unblock-notification-permission"
+                  onClick={() => setIsUnblockModalOpen(true)}
+                  className="flex-1 py-2 px-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-black text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs animate-pulse ring-2 ring-red-400/40"
+                  title="ब्राउज़र अनुमति अनलॉक करने की गाइड खोलें"
+                >
+                  <Unlock className="w-3.5 h-3.5 text-amber-200" />
+                  <span>ब्राउज़र में अनलॉक करें (Unblock Now)</span>
+                </button>
+              ) : permissionStatus !== 'granted' ? (
+                <button
+                  type="button"
+                  id="btn-request-notification-permission"
+                  onClick={async () => {
+                    await enablePushNotifications();
+                    const status = servicemanAlarmSettingsService.getNotificationPermissionStatus();
+                    setPermissionStatus(status);
+                  }}
+                  className="flex-1 py-2 px-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                >
+                  <Bell className="w-3.5 h-3.5" />
+                  <span>सूचनाएं चालू करें (Enable Push)</span>
+                </button>
+              ) : null}
+            </div>
           </div>
 
           {/* Sound & Alert Testing Suite */}
@@ -329,6 +354,38 @@ export const ServicemanAlarmSettingsModal: React.FC<Props> = ({
                 <Radio className="w-3.5 h-3.5 animate-pulse" />
                 <span>स्क्रीन टेस्ट (Simulate)</span>
               </button>
+            </div>
+
+            {/* FCM Real Push Notification Test */}
+            <div className="pt-1 border-t border-amber-200/60">
+              <button
+                type="button"
+                id="btn-test-real-fcm-push"
+                disabled={isSendingPushTest}
+                onClick={async () => {
+                  setIsSendingPushTest(true);
+                  setPushTestResult(null);
+                  try {
+                    const res = await sendTestPush();
+                    setPushTestResult(res.message);
+                  } catch (e: any) {
+                    setPushTestResult(e?.message || 'Push test failed');
+                  } finally {
+                    setIsSendingPushTest(false);
+                    setTimeout(() => setPushTestResult(null), 4000);
+                  }
+                }}
+                className="w-full py-2 px-3 rounded-xl bg-stone-900 hover:bg-stone-800 text-amber-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                <Send className="w-3.5 h-3.5 text-amber-400" />
+                <span>{isSendingPushTest ? 'पुश भेजा जा रहा है...' : 'FCM पुश टेस्ट भेजें (Test Real Push)'}</span>
+              </button>
+
+              {pushTestResult && (
+                <p className="text-[10px] text-center font-bold text-emerald-800 mt-1 animate-in fade-in">
+                  ✓ {pushTestResult}
+                </p>
+              )}
             </div>
           </div>
 
@@ -419,6 +476,17 @@ export const ServicemanAlarmSettingsModal: React.FC<Props> = ({
           </button>
         </div>
       </div>
+
+      {/* Browser Notification Unblock Modal */}
+      <BrowserNotificationUnblockModal
+        isOpen={isUnblockModalOpen}
+        onClose={() => setIsUnblockModalOpen(false)}
+        onSuccess={() => {
+          setIsUnblockModalOpen(false);
+          const status = servicemanAlarmSettingsService.getNotificationPermissionStatus();
+          setPermissionStatus(status);
+        }}
+      />
     </div>
   );
 };

@@ -20,6 +20,8 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  QrCode,
+  Banknote,
 } from 'lucide-react';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
@@ -27,6 +29,8 @@ import { Booking, BookingStatus, ServiceMan } from '../../types';
 import { generateWhatsAppVideoCallUrl } from '../../utils/whatsappVideoCall';
 import { HardinkaamServiceBill } from '../common/HardinkaamServiceBill';
 import { AdminBookingTrackingHistoryModal } from './AdminBookingTrackingHistoryModal';
+import { AdminBookingUpiPaymentModal } from './AdminBookingUpiPaymentModal';
+import { AdminCashTransactionModal } from './AdminCashTransactionModal';
 
 interface Props {
   bookings: Booking[];
@@ -49,6 +53,9 @@ export const AdminBookingsManager: React.FC<Props> = ({
   const [selectedProId, setSelectedProId] = useState<string>('');
   const [viewingBillBooking, setViewingBillBooking] = useState<Booking | null>(null);
   const [viewingHistoryBooking, setViewingHistoryBooking] = useState<Booking | null>(null);
+  const [upiPaymentBooking, setUpiPaymentBooking] = useState<Booking | null>(null);
+  const [cashApprovalBooking, setCashApprovalBooking] = useState<Booking | null>(null);
+  const [justPaidBookingId, setJustPaidBookingId] = useState<string | null>(null);
 
   // Spark Quota Optimization: Client-side pagination to render large lists efficiently
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -300,7 +307,12 @@ export const AdminBookingsManager: React.FC<Props> = ({
                       <div className="text-stone-800 font-medium">{b.scheduledDate}</div>
                       <div className="text-stone-400 text-[10px]">{b.scheduledTime}</div>
                     </td>
-                    <td className="py-3.5 px-4">
+                    <td className="py-3.5 px-4 relative">
+                      {justPaidBookingId === b.id && (
+                        <div className="absolute -top-2 -right-2 bg-emerald-500 text-white rounded-full p-1 shadow-lg animate-in zoom-in spin-in-12 duration-300 flex items-center justify-center z-10" title="Payment Verified & Marked as Paid!">
+                          <CheckCircle2 className="w-4 h-4 text-white stroke-[3]" />
+                        </div>
+                      )}
                       {b.status === 'completed' ? (
                         <div className="space-y-0.5">
                           <div className="text-[11px] text-stone-600 flex items-center justify-between gap-2">
@@ -381,17 +393,33 @@ export const AdminBookingsManager: React.FC<Props> = ({
                           <Route className="w-3.5 h-3.5" />
                         </button>
 
-                        {/* Phase 9: Admin view full service bill */}
-                        {b.status === 'completed' && (
+                        {/* Cash Payment Verification & Approval Button */}
+                        {b.cashPaymentStatus === 'pending_approval' && (
                           <button
                             type="button"
-                            onClick={() => setViewingBillBooking(b)}
-                            className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-amber-400 border border-slate-800 cursor-pointer transition-colors"
-                            title="View Hardinkaam Service Bill"
+                            onClick={() => setCashApprovalBooking(b)}
+                            className="px-2 py-1 rounded-lg text-[11px] font-black flex items-center gap-1 transition-all cursor-pointer shadow-xs bg-amber-500 hover:bg-amber-600 text-white animate-pulse"
+                            title="नकद भुगतान सत्यापित व स्वीकृत करें"
                           >
-                            <Receipt className="w-3.5 h-3.5" />
+                            <Banknote className="w-3.5 h-3.5" />
+                            <span>नकद अप्रूव</span>
                           </button>
                         )}
+
+                        {/* Dynamic UPI QR Payment Verification Button */}
+                        <button
+                          type="button"
+                          onClick={() => setUpiPaymentBooking(b)}
+                          className={`px-2 py-1 rounded-lg text-[11px] font-black flex items-center gap-1 transition-all cursor-pointer shadow-xs ${
+                            b.paymentStatus === 'paid'
+                              ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-300'
+                              : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white'
+                          }`}
+                          title="Generate Dynamic UPI QR Code & Confirm Payment"
+                        >
+                          <QrCode className="w-3.5 h-3.5" />
+                          <span>{b.paymentStatus === 'paid' ? 'Paid ✓' : 'UPI QR'}</span>
+                        </button>
 
                         {/* WhatsApp Video Call & Room Launcher */}
                         <a
@@ -567,6 +595,30 @@ export const AdminBookingsManager: React.FC<Props> = ({
         isOpen={!!viewingHistoryBooking}
         onClose={() => setViewingHistoryBooking(null)}
       />
+
+      {/* Dynamic UPI QR Payment Modal */}
+      <AdminBookingUpiPaymentModal
+        booking={upiPaymentBooking}
+        isOpen={!!upiPaymentBooking}
+        onClose={() => setUpiPaymentBooking(null)}
+        onSuccess={(id) => {
+          setJustPaidBookingId(id);
+          setTimeout(() => setJustPaidBookingId(null), 3500);
+          onRefresh();
+        }}
+      />
+
+      {/* Admin Cash Transaction Modal */}
+      {cashApprovalBooking && (
+        <AdminCashTransactionModal
+          booking={cashApprovalBooking}
+          isOpen={Boolean(cashApprovalBooking)}
+          onClose={() => setCashApprovalBooking(null)}
+          onSuccess={() => {
+            onRefresh();
+          }}
+        />
+      )}
     </div>
   );
 };

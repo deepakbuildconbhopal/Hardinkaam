@@ -52,7 +52,12 @@ export const AdminRealtimeNotificationCenter: React.FC<Props> = ({
   const [simulating, setSimulating] = useState(false);
   const [toastAlert, setToastAlert] = useState<AdminRealtimeAlert | null>(null);
 
-  // Initialize alerts and listen real-time
+  const soundEnabledRef = React.useRef(soundEnabled);
+  useEffect(() => {
+    soundEnabledRef.current = soundEnabled;
+  }, [soundEnabled]);
+
+  // Initialize alerts and listen real-time (runs once on mount)
   useEffect(() => {
     seedInitialAdminAlertsIfEmpty();
 
@@ -63,7 +68,7 @@ export const AdminRealtimeNotificationCenter: React.FC<Props> = ({
         const newest = list[0];
         if (!newest.read) {
           setToastAlert(newest);
-          if (soundEnabled) {
+          if (soundEnabledRef.current) {
             playAdminChime(newest.priority === 'critical' ? 'critical' : 'normal');
           }
         }
@@ -73,7 +78,7 @@ export const AdminRealtimeNotificationCenter: React.FC<Props> = ({
     });
 
     return () => unsubscribe();
-  }, [soundEnabled]);
+  }, []);
 
   // Auto-dismiss transient toast after 6 seconds
   useEffect(() => {

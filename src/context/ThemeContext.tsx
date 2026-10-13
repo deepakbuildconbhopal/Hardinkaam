@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
-import { db } from '../firebase/config';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db, auth } from '../firebase/config';
 import { FestivalTheme, FestivalThemeId, ThemeSettingsDocument, FestivalMetadata } from '../types/theme';
 import { FESTIVAL_THEMES, THEME_LIST, DEFAULT_THEME_ID } from '../config/themes';
+import { isResourceExhausted, checkAndHandleQuotaError } from '../utils/sparkQuotaGuard';
 
 const STORAGE_KEY = 'hardinkaam_active_theme_id';
 
@@ -48,6 +49,33 @@ function applyThemeToDom(theme: FestivalTheme) {
   // Set data attributes for custom CSS hooks
   root.setAttribute('data-theme', theme.id);
   root.setAttribute('data-theme-category', theme.category);
+
+  // Detect dark/darkblue theme: ensures all fonts are light-colored
+  const isDarkBlue =
+    theme.id === 'darkblue' ||
+    theme.id === 'dark_blue' ||
+    theme.id === 'maha_shivratri_premium' ||
+    Boolean(theme.isDark);
+
+  if (isDarkBlue) {
+    root.setAttribute('data-theme-mode', 'dark');
+    root.classList.add('theme-darkblue', 'dark');
+    root.style.setProperty('--hk-ink', '#f8fafc');
+    root.style.setProperty('--hk-muted', '#cbd5e1');
+    root.style.setProperty('--hk-bg', '#070d1e');
+    root.style.setProperty('--hk-surface', 'rgba(15, 23, 42, 0.95)');
+    root.style.setProperty('--hk-surface-solid', '#0f172a');
+    root.style.setProperty('--hk-line', 'rgba(148, 163, 184, 0.2)');
+  } else {
+    root.removeAttribute('data-theme-mode');
+    root.classList.remove('theme-darkblue', 'dark');
+    root.style.setProperty('--hk-ink', '#172033');
+    root.style.setProperty('--hk-muted', '#667085');
+    root.style.setProperty('--hk-bg', '#f6f8fc');
+    root.style.setProperty('--hk-surface', 'rgba(255, 255, 255, 0.92)');
+    root.style.setProperty('--hk-surface-solid', '#ffffff');
+    root.style.setProperty('--hk-line', 'rgba(15, 23, 42, 0.09)');
+  }
 }
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -89,14 +117,20 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     applyThemeToDom(effectiveTheme);
   }, [effectiveTheme]);
 
-  // Real-time synchronization with Firebase Firestore (collection: 'themeSettings', doc: 'global')
+  // Bounded one-time fetch with Firebase Firestore (collection: 'themeSettings', doc: 'global')
   useEffect(() => {
-    setIsLoading(true);
-    const themeDocRef = doc(db, 'themeSettings', 'global');
+    if (isResourceExhausted()) {
+      setIsLoading(false);
+      return;
+    }
 
-    const unsubscribe = onSnapshot(
-      themeDocRef,
-      (snapshot) => {
+    let isMounted = true;
+    const fetchTheme = async () => {
+      setIsLoading(true);
+      const themeDocRef = doc(db, 'themeSettings', 'global');
+      try {
+        const snapshot = await getDoc(themeDocRef);
+        if (!isMounted) return;
         setIsLoading(false);
         if (snapshot.exists()) {
           const data = snapshot.data() as ThemeSettingsDocument;
@@ -109,28 +143,19 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               // ignore
             }
           }
-        } else {
-          // Document does not exist yet; initialize default theme in Firestore
-          setDoc(
-            themeDocRef,
-            {
-              activeThemeId: DEFAULT_THEME_ID,
-              updatedAt: new Date().toISOString(),
-              version: 1,
-            },
-            { merge: true }
-          ).catch((err) => {
-            console.warn('Initial themeSettings bootstrap note:', err);
-          });
         }
-      },
-      (err) => {
-        console.warn('Firestore themeSettings listener notice:', err);
+      } catch (err) {
+        if (!isMounted) return;
+        console.warn('Firestore themeSettings load notice:', err);
+        checkAndHandleQuotaError(err);
         setIsLoading(false);
       }
-    );
+    };
 
-    return () => unsubscribe();
+    fetchTheme();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Activate theme and save to Firebase Firestore

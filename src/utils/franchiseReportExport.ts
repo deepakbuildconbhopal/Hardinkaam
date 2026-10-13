@@ -1,5 +1,3 @@
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { FranchisePartner, FranchiseAgreementRecord, KYCDocumentRecord } from '../types';
 
 export interface FranchiseReportOptions {
@@ -17,7 +15,10 @@ export interface FranchiseReportOptions {
 /**
  * Generates an official, beautifully formatted summary PDF report of Franchise Partner Agreement & KYC status
  */
-export const generateFranchiseAgreementKycPDF = (options: FranchiseReportOptions) => {
+export const generateFranchiseAgreementKycPDF = async (options: FranchiseReportOptions) => {
+  const { default: jsPDF } = await import('jspdf');
+  const { default: autoTable } = await import('jspdf-autotable');
+
   const {
     partner,
     agreement,
@@ -60,7 +61,7 @@ export const generateFranchiseAgreementKycPDF = (options: FranchiseReportOptions
 
   doc.setFontSize(7.5);
   doc.setTextColor(214, 211, 209); // Stone 300
-  doc.text('Corporate HQ: MP Nagar Zone 1, Bhopal, MP • Phone: +91 98260 12345', 40, 63);
+  doc.text('Corporate HQ: MP Nagar Zone 1, Bhopal, MP • Phone: +91 62675 46945', 40, 63);
 
   // Document Title on Right
   doc.setFont('helvetica', 'bold');
@@ -277,7 +278,7 @@ export const generateFranchiseAgreementKycPDF = (options: FranchiseReportOptions
     footerBoxY + 26
   );
   doc.text(
-    'For any discrepancies or official updates, please reach Deepak Buildcon Compliance Cell: deepakbuildconbhopal@gmail.com | +91 98260 12345',
+    'For any discrepancies or official updates, please reach Deepak Buildcon Compliance Cell: deepakbuildconbhopal@gmail.com | +91 62675 46945',
     50,
     footerBoxY + 38
   );

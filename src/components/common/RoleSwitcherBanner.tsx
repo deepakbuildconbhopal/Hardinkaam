@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldAlert, UserCheck, Wrench, RefreshCw, Trash2, ArrowRight, FileSpreadsheet, Database } from 'lucide-react';
+import { ShieldAlert, UserCheck, Wrench, RefreshCw, Trash2, ArrowRight, FileSpreadsheet, Database, Sparkles } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { UserRole } from '../../types';
 
@@ -15,10 +15,10 @@ interface Props {
  * Gives the Administrator master controls and view preview options.
  */
 export const RoleSwitcherBanner: React.FC<Props> = ({ onRefreshSeed, onOpenZeroDataModal, onSelectTab }) => {
-  const { activeRole, setActiveRole, isAdmin, currentUser, userProfile } = useAuth();
+  const { activeRole, setActiveRole, isAdmin, currentUser, userProfile, loading } = useAuth();
 
-  // Strict RBAC: Only Platform Administrators can see or use this toolbar
-  if (!isAdmin) {
+  // Strict RBAC: Only Platform Administrators can see or use this toolbar. Zero leak during loading.
+  if (loading || !isAdmin) {
     return null;
   }
 
@@ -57,6 +57,23 @@ export const RoleSwitcherBanner: React.FC<Props> = ({ onRefreshSeed, onOpenZeroD
 
         {/* Action Controls */}
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Direct Marketing Agent Button */}
+          <button
+            type="button"
+            id="role-banner-marketing-agent-btn"
+            onClick={() => {
+              setActiveRole('admin');
+              if (onSelectTab) {
+                onSelectTab('admin_marketing_agent');
+              }
+            }}
+            className="px-3 py-1 rounded-full text-xs font-black bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-stone-950 transition-all cursor-pointer flex items-center gap-1.5 shadow-xs border border-amber-300 hover:scale-102"
+            title="Google Maps लीड्स, AI विज्ञापन निर्माण व आउटरीच एजेंट"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-stone-950 animate-pulse" />
+            <span>🎯 AI मार्केटिंग एजेंट (Marketing)</span>
+          </button>
+
           {/* Direct Excel Import Button */}
           <button
             type="button"

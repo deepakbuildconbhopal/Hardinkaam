@@ -260,25 +260,31 @@ export async function startServicemanPeriodicGpsTracking(
   }
 
   // 4. Watch booking status in Firestore to stop automatically if completed or cancelled
-  const unsubBooking = onSnapshot(doc(db, 'bookings', bookingId), (snap) => {
-    if (snap.exists()) {
-      const currentBooking = snap.data() as Booking;
-      const statusLower = (currentBooking.status || '').toLowerCase();
-      if (terminalStatuses.includes(statusLower)) {
-        console.log(`[ServicemanGPS] Booking #${bookingId} transitioned to ${statusLower}. Stopping location updates.`);
-        stopServicemanPeriodicGpsTracking(bookingId);
-        // Also update serviceTracking doc to terminal status
-        const terminalTrackingStatus =
-          statusLower === 'completed' || statusLower === 'work_completed'
-            ? 'COMPLETED'
-            : 'CANCELLED';
-        updateDoc(doc(db, SERVICE_TRACKING_COLLECTION, bookingId), {
-          status: terminalTrackingStatus,
-          lastUpdatedAt: new Date().toISOString(),
-        }).catch((e) => console.warn('Could not mark serviceTracking terminal:', e));
+  const unsubBooking = onSnapshot(
+    doc(db, 'bookings', bookingId),
+    (snap) => {
+      if (snap.exists()) {
+        const currentBooking = snap.data() as Booking;
+        const statusLower = (currentBooking.status || '').toLowerCase();
+        if (terminalStatuses.includes(statusLower)) {
+          console.log(`[ServicemanGPS] Booking #${bookingId} transitioned to ${statusLower}. Stopping location updates.`);
+          stopServicemanPeriodicGpsTracking(bookingId);
+          // Also update serviceTracking doc to terminal status
+          const terminalTrackingStatus =
+            statusLower === 'completed' || statusLower === 'work_completed'
+              ? 'COMPLETED'
+              : 'CANCELLED';
+          updateDoc(doc(db, SERVICE_TRACKING_COLLECTION, bookingId), {
+            status: terminalTrackingStatus,
+            lastUpdatedAt: new Date().toISOString(),
+          }).catch((e) => console.warn('Could not mark serviceTracking terminal:', e));
+        }
       }
+    },
+    (err) => {
+      console.warn(`[ServicemanGPS] Booking #${bookingId} status listener notice:`, err.message);
     }
-  });
+  );
 
   // Store in active registry
   activeGpsTrackers.set(bookingId, {

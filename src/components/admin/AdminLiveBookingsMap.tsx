@@ -6,6 +6,8 @@ import {
   ExternalLink,
   Activity,
   User,
+  Users,
+  Compass,
   ShieldCheck,
   ChevronDown,
   ChevronUp,
@@ -28,8 +30,9 @@ import {
   Check,
   UserCheck,
 } from 'lucide-react';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, query, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../../utils/sparkQuotaGuard';
 import { INITIAL_SERVICE_MEN } from '../../firebase/seed';
 import { Booking, ServiceMan, ServiceManLocationData, TrackingLocationPoint } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -161,26 +164,25 @@ export const AdminLiveBookingsMap: React.FC<Props> = ({
 
   // Real-time listener for servicemen collection from Firestore with fallback to INITIAL_SERVICEMEN
   useEffect(() => {
+    // If serviceMen were already passed via props from App/parent, do not open duplicate listener
+    if (serviceMen && serviceMen.length > 0) return;
+    if (isResourceExhausted()) return;
+
     const unsub = onSnapshot(
-      collection(db, 'serviceMen'),
+      query(collection(db, 'service_men'), limit(50)),
       (snapshot) => {
-        if (!snapshot.empty) {
-          const list = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as ServiceMan));
-          setActiveServiceMen(list);
-        } else if (INITIAL_SERVICE_MEN && INITIAL_SERVICE_MEN.length > 0) {
-          setActiveServiceMen((prev) => (prev.length === 0 ? INITIAL_SERVICE_MEN : prev));
-        }
+        const list = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as ServiceMan));
+        setActiveServiceMen(list);
       },
       (err) => {
-        console.warn('Firestore serviceMen listener fallback notice:', err);
-        if (INITIAL_SERVICE_MEN && INITIAL_SERVICE_MEN.length > 0) {
-          setActiveServiceMen((prev) => (prev.length === 0 ? INITIAL_SERVICE_MEN : prev));
-        }
+        console.warn('Firestore serviceMen listener notice:', err);
+        checkAndHandleQuotaError(err);
+        setActiveServiceMen([]);
       }
     );
 
     return () => unsub();
-  }, []);
+  }, [serviceMen]);
 
   const handleOpenDispatchModal = (booking: Booking) => {
     setDispatchingBooking(booking);
@@ -385,7 +387,7 @@ export const AdminLiveBookingsMap: React.FC<Props> = ({
       id: 'SIM-BHOPAL-TEST',
       customerId: 'sim-cust-1',
       customerName: 'दीपक शर्मा (ग्राहक - अरेरा कॉलोनी)',
-      customerPhone: '9826012345',
+      customerPhone: '6267546945',
       serviceId: 'srv-ac-1',
       serviceName: 'AC रिपेयर & गैस रिफिल सर्विस',
       categoryId: 'cat-ac',
@@ -441,6 +443,57 @@ export const AdminLiveBookingsMap: React.FC<Props> = ({
     }
     return mapItems;
   }, [simulatedMapItem, mapItems]);
+
+  // Marker Clustering state & logic to prevent overlap when multiple ServiceMen are in the same area
+  const [expandedClusterId, setExpandedClusterId] = useState<string | null>(null);
+
+  interface MapCluster {
+    id: string;
+    lat: number;
+    lng: number;
+    items: ActiveBookingMapItem[];
+    isCluster: boolean;
+  }
+
+  const mapClusters = useMemo<MapCluster[]>(() => {
+    const clusters: MapCluster[] = [];
+    const threshold = 0.008; // ~800m proximity threshold for clustering nearby servicemen
+    const processedIds = new Set<string>();
+
+    combinedMapItems.forEach((item, idx) => {
+      if (processedIds.has(item.booking.id)) return;
+      const coords = item.servicemanCoords || item.customerCoords;
+      if (!coords) return;
+
+      const group: ActiveBookingMapItem[] = [item];
+      processedIds.add(item.booking.id);
+
+      combinedMapItems.forEach((other, oIdx) => {
+        if (idx === oIdx || processedIds.has(other.booking.id)) return;
+        const oCoords = other.servicemanCoords || other.customerCoords;
+        if (!oCoords) return;
+
+        const dist = Math.hypot(coords.lat - oCoords.lat, coords.lng - oCoords.lng);
+        if (dist < threshold) {
+          group.push(other);
+          processedIds.add(other.booking.id);
+        }
+      });
+
+      const avgLat = group.reduce((acc, g) => acc + (g.servicemanCoords?.lat || g.customerCoords.lat), 0) / group.length;
+      const avgLng = group.reduce((acc, g) => acc + (g.servicemanCoords?.lng || g.customerCoords.lng), 0) / group.length;
+
+      clusters.push({
+        id: `cluster-${group[0].booking.id}`,
+        lat: avgLat,
+        lng: avgLng,
+        items: group,
+        isCluster: group.length > 1,
+      });
+    });
+
+    return clusters;
+  }, [combinedMapItems]);
 
   // Compute road routes for visible active bookings
   useEffect(() => {
@@ -605,6 +658,40 @@ export const AdminLiveBookingsMap: React.FC<Props> = ({
     setZoom(activeBookings.length > 2 ? 12 : 13);
   };
 
+  const handleZoomToAllServiceMen = () => {
+    const proCoordsList = combinedMapItems
+      .map((item) => item.servicemanCoords)
+      .filter((c): c is { lat: number; lng: number } => c !== null && c !== undefined);
+
+    if (proCoordsList.length === 0) {
+      setMapCenter(defaultCenter);
+      setZoom(13);
+      return;
+    }
+
+    const minLat = Math.min(...proCoordsList.map((p) => p.lat));
+    const maxLat = Math.max(...proCoordsList.map((p) => p.lat));
+    const minLng = Math.min(...proCoordsList.map((p) => p.lng));
+    const maxLng = Math.max(...proCoordsList.map((p) => p.lng));
+
+    const centerLat = (minLat + maxLat) / 2;
+    const centerLng = (minLng + maxLng) / 2;
+
+    const latSpan = maxLat - minLat;
+    const lngSpan = maxLng - minLng;
+    const maxSpan = Math.max(latSpan, lngSpan);
+
+    let targetZoom = 14;
+    if (maxSpan > 0.5) targetZoom = 10;
+    else if (maxSpan > 0.2) targetZoom = 11;
+    else if (maxSpan > 0.08) targetZoom = 12;
+    else if (maxSpan > 0.03) targetZoom = 13;
+    else targetZoom = 14;
+
+    setMapCenter({ lat: centerLat, lng: centerLng });
+    setZoom(targetZoom);
+  };
+
   const selectedItem = useMemo(() => {
     return combinedMapItems.find((m) => m.booking.id === selectedBookingId) || null;
   }, [combinedMapItems, selectedBookingId]);
@@ -744,6 +831,17 @@ export const AdminLiveBookingsMap: React.FC<Props> = ({
           >
             <Crosshair className="w-3.5 h-3.5 text-orange-400" />
             <span>Fit All ({combinedMapItems.length})</span>
+          </button>
+
+          <button
+            type="button"
+            id="btn-zoom-to-all-servicemen"
+            onClick={handleZoomToAllServiceMen}
+            className="px-3 py-1.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white border border-orange-400 text-xs font-black flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+            title="सभी एक्टिव सर्विसमैन मार्कर्स पर मैप बाउंड्स ज़ूम व एडजस्ट करें"
+          >
+            <Compass className="w-3.5 h-3.5 text-white" />
+            <span>Zoom to All ({combinedMapItems.filter(i => i.servicemanCoords).length} Pros)</span>
           </button>
 
           <div className="flex items-center bg-stone-800 border border-stone-700 rounded-xl p-0.5">
@@ -1056,101 +1154,158 @@ export const AdminLiveBookingsMap: React.FC<Props> = ({
             })}
           </svg>
 
-          {/* HTML Markers Layer for each active booking */}
-          {combinedMapItems.map((item) => {
-            const isSelected = selectedBookingId === item.booking.id;
-            const destPx = getPixelPosition(item.destinationCoords.lat, item.destinationCoords.lng);
-            const custPx = getPixelPosition(item.customerCoords.lat, item.customerCoords.lng);
-            const proPx = item.servicemanCoords
-              ? getPixelPosition(item.servicemanCoords.lat, item.servicemanCoords.lng)
-              : null;
+          {/* HTML Markers Layer with Marker Clustering for Nearby ServiceMen */}
+          {mapClusters.map((cluster) => {
+            const isExpanded = expandedClusterId === cluster.id;
+            const clusterPx = getPixelPosition(cluster.lat, cluster.lng);
 
+            // If it's a cluster of multiple items and not expanded, render a Cluster Badge Marker
+            if (cluster.isCluster && cluster.items.length > 1 && !isExpanded) {
+              return (
+                <div
+                  key={cluster.id}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setExpandedClusterId(cluster.id);
+                    setMapCenter({ lat: cluster.lat, lng: cluster.lng });
+                    setZoom((z) => Math.min(18, z + 2));
+                  }}
+                  style={{
+                    transform: `translate(calc(-50% + ${clusterPx.x}px), calc(-50% + ${clusterPx.y}px))`,
+                  }}
+                  className="absolute top-1/2 left-1/2 cursor-pointer z-30 hover:scale-110 transition-transform"
+                  title={`${cluster.items.length} ServiceMen in this area. Click to expand cluster.`}
+                >
+                  <div className="flex flex-col items-center">
+                    <div className="px-3 py-1 rounded-2xl bg-orange-600 hover:bg-orange-500 text-white text-[11px] font-black shadow-xl border-2 border-white flex items-center gap-1.5 animate-pulse">
+                      <Users className="w-4 h-4 text-orange-200" />
+                      <span>{cluster.items.length} ServiceMen (Cluster)</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            // Otherwise, render individual items (or expanded cluster items)
             return (
-              <React.Fragment key={`markers-${item.booking.id}`}>
-                {/* 1. Destination Marker (Job Site) */}
-                <div
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleFocusBooking(item);
-                  }}
-                  style={{
-                    transform: `translate(calc(-50% + ${destPx.x}px), calc(-50% + ${destPx.y}px))`,
-                  }}
-                  className={`absolute top-1/2 left-1/2 cursor-pointer transition-transform ${
-                    isSelected ? 'z-30 scale-110' : 'z-10 hover:scale-105 opacity-85'
-                  }`}
-                  title={`Destination: ${item.booking.address}`}
-                >
-                  <div className="flex flex-col items-center">
-                    <div className="px-2 py-0.5 rounded-md bg-blue-900/90 text-white text-[9px] font-bold shadow-md whitespace-nowrap mb-1 flex items-center gap-1 border border-blue-400/40">
-                      <MapPin className="w-2.5 h-2.5 text-blue-300" />
-                      <span>Dest: {item.booking.address.slice(0, 14)}...</span>
-                    </div>
-                    <div className="w-7 h-7 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-lg border-2 border-white">
-                      <MapPin className="w-3.5 h-3.5" />
-                    </div>
-                  </div>
-                </div>
-
-                {/* 2. Customer Location Marker */}
-                <div
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleFocusBooking(item);
-                  }}
-                  style={{
-                    transform: `translate(calc(-50% + ${custPx.x - 14}px), calc(-50% + ${custPx.y - 12}px))`,
-                  }}
-                  className={`absolute top-1/2 left-1/2 cursor-pointer transition-transform ${
-                    isSelected ? 'z-30 scale-110' : 'z-10 hover:scale-105 opacity-85'
-                  }`}
-                  title={`Customer: ${item.booking.customerName}`}
-                >
-                  <div className="flex flex-col items-center">
-                    <div className="px-2 py-0.5 rounded-md bg-emerald-900/90 text-white text-[9px] font-bold shadow-md whitespace-nowrap mb-1 flex items-center gap-1 border border-emerald-400/40">
-                      <User className="w-2.5 h-2.5 text-emerald-300" />
-                      <span>{item.booking.customerName}</span>
-                    </div>
-                    <div className="w-7 h-7 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-lg border-2 border-white">
-                      <User className="w-3.5 h-3.5" />
-                    </div>
-                  </div>
-                </div>
-
-                {/* 3. Serviceman Live Location Marker */}
-                {proPx && (
+              <React.Fragment key={cluster.id}>
+                {cluster.isCluster && cluster.items.length > 1 && isExpanded && (
                   <div
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleFocusBooking(item);
-                    }}
                     style={{
-                      transform: `translate(calc(-50% + ${proPx.x}px), calc(-50% + ${proPx.y}px))`,
+                      transform: `translate(calc(-50% + ${clusterPx.x}px), calc(-50% + ${clusterPx.y - 36}px))`,
                     }}
-                    className={`absolute top-1/2 left-1/2 cursor-pointer transition-transform ${
-                      isSelected ? 'z-40 scale-115' : 'z-20 hover:scale-105'
-                    }`}
-                    title={`Serviceman: ${item.booking.serviceManName || 'Pro'}`}
+                    className="absolute top-1/2 left-1/2 z-30"
                   >
-                    <div className="flex flex-col items-center">
-                      <div className="px-2 py-0.5 rounded-md bg-orange-950/90 text-white text-[9px] font-bold shadow-md whitespace-nowrap mb-1 flex items-center gap-1 border border-orange-400/60">
-                        <Navigation className="w-2.5 h-2.5 text-orange-400" />
-                        <span>{item.booking.serviceManName || 'Serviceman'}</span>
-                        {item.etaMinutes !== null && (
-                          <span className="text-orange-300 font-semibold">({item.etaMinutes}m)</span>
-                        )}
-                      </div>
-
-                      <div className="relative">
-                        {/* Pulse Ring */}
-                        <span className="absolute -inset-1 rounded-2xl bg-orange-500/40 animate-ping pointer-events-none" />
-                        <div className="relative w-8 h-8 rounded-2xl bg-orange-600 text-white flex items-center justify-center shadow-xl border-2 border-white font-black">
-                          <Navigation className="w-4 h-4 text-white" />
-                        </div>
-                      </div>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedClusterId(null);
+                      }}
+                      className="px-2 py-0.5 rounded-lg bg-stone-900 text-white text-[9px] font-bold shadow-md border border-stone-700 cursor-pointer"
+                    >
+                      Collapse Cluster ✕
+                    </button>
                   </div>
                 )}
+
+                {cluster.items.map((item) => {
+                  const isSelected = selectedBookingId === item.booking.id;
+                  const destPx = getPixelPosition(item.destinationCoords.lat, item.destinationCoords.lng);
+                  const custPx = getPixelPosition(item.customerCoords.lat, item.customerCoords.lng);
+                  const proPx = item.servicemanCoords
+                    ? getPixelPosition(item.servicemanCoords.lat, item.servicemanCoords.lng)
+                    : null;
+
+                  return (
+                    <React.Fragment key={`markers-${item.booking.id}`}>
+                      {/* 1. Destination Marker (Job Site) */}
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleFocusBooking(item);
+                        }}
+                        style={{
+                          transform: `translate(calc(-50% + ${destPx.x}px), calc(-50% + ${destPx.y}px))`,
+                        }}
+                        className={`absolute top-1/2 left-1/2 cursor-pointer transition-transform ${
+                          isSelected ? 'z-30 scale-110' : 'z-10 hover:scale-105 opacity-85'
+                        }`}
+                        title={`Destination: ${item.booking.address}`}
+                      >
+                        <div className="flex flex-col items-center">
+                          <div className="px-2 py-0.5 rounded-md bg-blue-900/90 text-white text-[9px] font-bold shadow-md whitespace-nowrap mb-1 flex items-center gap-1 border border-blue-400/40">
+                            <MapPin className="w-2.5 h-2.5 text-blue-300" />
+                            <span>Dest: {item.booking.address.slice(0, 14)}...</span>
+                          </div>
+                          <div className="w-7 h-7 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-lg border-2 border-white">
+                            <MapPin className="w-3.5 h-3.5" />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 2. Customer Location Marker */}
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleFocusBooking(item);
+                        }}
+                        style={{
+                          transform: `translate(calc(-50% + ${custPx.x - 14}px), calc(-50% + ${custPx.y - 12}px))`,
+                        }}
+                        className={`absolute top-1/2 left-1/2 cursor-pointer transition-transform ${
+                          isSelected ? 'z-30 scale-110' : 'z-10 hover:scale-105 opacity-85'
+                        }`}
+                        title={`Customer: ${item.booking.customerName}`}
+                      >
+                        <div className="flex flex-col items-center">
+                          <div className="px-2 py-0.5 rounded-md bg-emerald-900/90 text-white text-[9px] font-bold shadow-md whitespace-nowrap mb-1 flex items-center gap-1 border border-emerald-400/40">
+                            <User className="w-2.5 h-2.5 text-emerald-300" />
+                            <span>{item.booking.customerName}</span>
+                          </div>
+                          <div className="w-7 h-7 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-lg border-2 border-white">
+                            <User className="w-3.5 h-3.5" />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 3. Serviceman Live Location Marker */}
+                      {proPx && (
+                        <div
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleFocusBooking(item);
+                          }}
+                          style={{
+                            transform: `translate(calc(-50% + ${proPx.x}px), calc(-50% + ${proPx.y}px))`,
+                          }}
+                          className={`absolute top-1/2 left-1/2 cursor-pointer transition-transform ${
+                            isSelected ? 'z-40 scale-115' : 'z-20 hover:scale-105'
+                          }`}
+                          title={`Serviceman: ${item.booking.serviceManName || 'Pro'}`}
+                        >
+                          <div className="flex flex-col items-center">
+                            <div className="px-2 py-0.5 rounded-md bg-orange-950/90 text-white text-[9px] font-bold shadow-md whitespace-nowrap mb-1 flex items-center gap-1 border border-orange-400/60">
+                              <Navigation className="w-2.5 h-2.5 text-orange-400" />
+                              <span>{item.booking.serviceManName || 'Serviceman'}</span>
+                              {item.etaMinutes !== null && (
+                                <span className="text-orange-300 font-semibold">({item.etaMinutes}m)</span>
+                              )}
+                            </div>
+
+                            <div className="relative">
+                              {/* Pulse Ring */}
+                              <span className="absolute -inset-1 rounded-2xl bg-orange-500/40 animate-ping pointer-events-none" />
+                              <div className="relative w-8 h-8 rounded-2xl bg-orange-600 text-white flex items-center justify-center shadow-xl border-2 border-white font-black">
+                                <Navigation className="w-4 h-4 text-white" />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </React.Fragment>
             );
           })}

@@ -280,32 +280,46 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCouponError(null);
   };
 
+  const contextValue = React.useMemo<CartContextType>(
+    () => ({
+      items,
+      addItem,
+      addPackageItem,
+      removeItem,
+      updateQuantity,
+      clearCart,
+      isItemInCart,
+      getItemQuantity,
+      totalItemsCount,
+      appliedCoupon,
+      couponCodeInput,
+      setCouponCodeInput,
+      applyCoupon,
+      removeCoupon,
+      couponError,
+      subtotal,
+      discountAmount,
+      safetyFee,
+      totalAmount,
+      isCartOpen,
+      setIsCartOpen,
+    }),
+    [
+      items,
+      appliedCoupon,
+      couponCodeInput,
+      couponError,
+      subtotal,
+      discountAmount,
+      safetyFee,
+      totalAmount,
+      isCartOpen,
+      totalItemsCount,
+    ]
+  );
+
   return (
-    <CartContext.Provider
-      value={{
-        items,
-        addItem,
-        addPackageItem,
-        removeItem,
-        updateQuantity,
-        clearCart,
-        isItemInCart,
-        getItemQuantity,
-        totalItemsCount,
-        appliedCoupon,
-        couponCodeInput,
-        setCouponCodeInput,
-        applyCoupon,
-        removeCoupon,
-        couponError,
-        subtotal,
-        discountAmount,
-        safetyFee,
-        totalAmount,
-        isCartOpen,
-        setIsCartOpen,
-      }}
-    >
+    <CartContext.Provider value={contextValue}>
       {children}
     </CartContext.Provider>
   );

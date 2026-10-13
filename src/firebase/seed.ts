@@ -1,5 +1,6 @@
-import { collection, getDocs, doc, setDoc, writeBatch } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from './config';
+import { collection, getDocs, doc, setDoc, writeBatch, deleteDoc, query, limit } from 'firebase/firestore';
+import { db, auth, handleFirestoreError, OperationType } from './config';
+import { isResourceExhausted, checkAndHandleQuotaError } from '../utils/sparkQuotaGuard';
 import { Category, Service, ServiceMan, PlatformSetting, Review } from '../types';
 
 export const INITIAL_CATEGORIES: Category[] = [
@@ -930,13 +931,13 @@ export const INITIAL_SETTINGS: PlatformSetting[] = [
   },
   {
     id: 'support_phone',
-    value: '+91 98260 12345',
+    value: '+91 62675 46945',
     description: 'Customer Support and Helpline Phone Number',
     updatedAt: new Date().toISOString(),
   },
   {
     id: 'emergency_helpline',
-    value: '+91 98260 12345',
+    value: '+91 62675 46945',
     description: 'HARDINKAAM 24/7 service emergency and toll-free contact',
     updatedAt: new Date().toISOString(),
   },
@@ -954,90 +955,117 @@ export const INITIAL_SETTINGS: PlatformSetting[] = [
   },
 ];
 
-export const INITIAL_REVIEWS: Review[] = [
-  {
-    id: 'rev_1_vivek',
-    bookingId: 'bk_sample_01',
-    customerId: 'cust_vivek_arera',
-    customerName: 'विवेक सक्सेना (अरेरा कॉलोनी)',
-    serviceId: 'srv_elec_short_circuit',
-    serviceManId: 'pro_rajesh_electrician',
-    rating: 5,
-    comment: 'राजेश जी ने हमारे अरेरा कॉलोनी स्थित घर में 45 मिनट के भीतर आकर पंखा और एमसीबी ठीक कर दी। कीमत एकदम वाजिब थी और काम पूरी तरह से साफ-सुथरा हुआ।',
-    createdAt: new Date(Date.now() - 2 * 86400000).toISOString(),
-  },
-  {
-    id: 'rev_2_pooja',
-    bookingId: 'bk_sample_02',
-    customerId: 'cust_pooja_kolar',
-    customerName: 'पूजा अग्रवाल (कोलार रोड)',
-    serviceId: 'srv_ac_jet_service',
-    serviceManId: 'pro_vikram_ac',
-    rating: 5,
-    comment: 'विक्रम जी की एसी जेट सर्विस लाजवाब थी। यूनिट से पानी टपकना पूरी तरह बंद हो गया और कूलिंग पहले जैसी तेज हो गई। 7 दिन की वारंटी वाकई मन को तसल्ली देती है।',
-    createdAt: new Date(Date.now() - 4 * 86400000).toISOString(),
-  },
-  {
-    id: 'rev_3_sanjay',
-    bookingId: 'bk_sample_03',
-    customerId: 'cust_sanjay_mpnagar',
-    customerName: 'संजय पाटीदार (एमपी नगर)',
-    serviceId: 'srv_clean_full_home',
-    serviceManId: 'pro_sunita_cleaning',
-    rating: 5,
-    comment: 'सुनीता जी की टीम ने हमारे फ्लैट की डीप क्लीनिंग बहुत ही पेशेवर तरीके से की। मशीनों से टाइल्स और किचन का एक-एक कोना चमका दिया।',
-    createdAt: new Date(Date.now() - 6 * 86400000).toISOString(),
-  },
-  {
-    id: 'rev_4_anurag',
-    bookingId: 'bk_sample_04',
-    customerId: 'cust_anurag_shahpura',
-    customerName: 'डॉ. अनुराग वर्मा (शाहपुरा)',
-    serviceId: 'srv_plumb_tank_clean',
-    serviceManId: 'pro_manoj_plumber',
-    rating: 5,
-    comment: 'पानी की टंकी की सफाई और मोटर लीकेज का काम बहुत सफाई से किया। मनोज जी का व्यवहार बहुत विनम्र था और समय की पाबंदी सराहनीय थी।',
-    createdAt: new Date(Date.now() - 9 * 86400000).toISOString(),
-  },
-  {
-    id: 'rev_5_sneha',
-    bookingId: 'bk_sample_05',
-    customerId: 'cust_sneha_gulmohar',
-    customerName: 'स्नेहा शर्मा (गुलमोहर)',
-    serviceId: 'srv_carp_modular_kitchen',
-    serviceManId: 'pro_ramesh_carpenter',
-    rating: 5,
-    comment: 'मॉड्यूलर किचन के हाइड्रोलिक चैनल और कबर्ड लॉक्स एकदम नए जैसे सेट कर दिए। हार्डिनकाम ऐप से बुकिंग करना बेहद आसान रहा।',
-    createdAt: new Date(Date.now() - 12 * 86400000).toISOString(),
-  },
-];
+function isUserSuperAdmin(): boolean {
+  if (!auth.currentUser) return false;
+  const email = (auth.currentUser.email || '').toLowerCase().trim();
+  return (
+    email === 'deepakbuildconbhopal@gmail.com' ||
+    email === 'admin@hardinkaam.in' ||
+    email === 'admin_deepak@hardinkaam.in' ||
+    email.includes('admin')
+  );
+}
+
+export async function clearAllDummyCollections(): Promise<number> {
+  let deletedCount = 0;
+  if (isResourceExhausted()) return 0;
+
+  try {
+    // Only proceed if authenticated as Super Admin in Firebase Auth
+    if (!isUserSuperAdmin()) {
+      return 0;
+    }
+
+    // Check if cleanup was already executed in this session to protect daily Spark read units
+    const cleanupKey = 'hdk_cleanup_checked_v1';
+    if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(cleanupKey)) {
+      return 0;
+    }
+
+    // 1. Delete all dummy sample reviews (bounded limit)
+    try {
+      const reviewSnap = await getDocs(query(collection(db, 'reviews'), limit(25)));
+      for (const docSnap of reviewSnap.docs) {
+        if (docSnap.id.startsWith('rev_') || docSnap.id.startsWith('sample_') || docSnap.id.startsWith('dummy_')) {
+          await deleteDoc(docSnap.ref).catch(() => {});
+          deletedCount++;
+        }
+      }
+    } catch (e) {
+      if (checkAndHandleQuotaError(e)) return deletedCount;
+    }
+
+    // 2. Delete dummy sample bookings (bounded limit)
+    try {
+      const bookingSnap = await getDocs(query(collection(db, 'bookings'), limit(25)));
+      for (const docSnap of bookingSnap.docs) {
+        if (docSnap.id.startsWith('bk_sample_') || docSnap.id.startsWith('demo_') || docSnap.id.startsWith('test_') || docSnap.id.startsWith('sample_')) {
+          await deleteDoc(docSnap.ref).catch(() => {});
+          deletedCount++;
+        }
+      }
+    } catch (e) {
+      if (checkAndHandleQuotaError(e)) return deletedCount;
+    }
+
+    // 3. Delete dummy sample service pros (bounded limit)
+    try {
+      const proSnap = await getDocs(query(collection(db, 'service_men'), limit(25)));
+      for (const docSnap of proSnap.docs) {
+        if (docSnap.id.startsWith('pro_') || docSnap.id.startsWith('sample_') || docSnap.id.startsWith('demo_')) {
+          await deleteDoc(docSnap.ref).catch(() => {});
+          deletedCount++;
+        }
+      }
+    } catch (e) {
+      if (checkAndHandleQuotaError(e)) return deletedCount;
+    }
+
+    // Mark cleanup checked in session
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(cleanupKey, 'true');
+    }
+  } catch (err) {
+    console.warn('Dummy collection cleanup notice:', err);
+    checkAndHandleQuotaError(err);
+  }
+  return deletedCount;
+}
 
 export async function ensureDatabaseSeeded() {
+  if (isResourceExhausted()) return;
+
   try {
-    const catSnap = await getDocs(collection(db, 'categories'));
+    // Only attempt client-side seeding if authenticated as Super Admin in Firebase Auth
+    if (!isUserSuperAdmin()) {
+      return;
+    }
+
+    // Session-level debounce: Do not perform collection scans on every component mount or tab switch
+    const seedCheckKey = 'hdk_db_seed_checked_v1';
+    if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(seedCheckKey)) {
+      return;
+    }
+
+    // Bounded check for categories
+    const catSnap = await getDocs(query(collection(db, 'categories'), limit(100)));
     const existingCatIds = new Set<string>();
     catSnap.forEach((doc) => existingCatIds.add(doc.id));
 
-    const srvSnap = await getDocs(collection(db, 'services'));
+    // Bounded check for services
+    const srvSnap = await getDocs(query(collection(db, 'services'), limit(100)));
     const existingSrvIds = new Set<string>();
     srvSnap.forEach((doc) => existingSrvIds.add(doc.id));
 
-    const proSnap = await getDocs(collection(db, 'service_men'));
-    const existingProIds = new Set<string>();
-    proSnap.forEach((doc) => existingProIds.add(doc.id));
-
-    const settingSnap = await getDocs(collection(db, 'settings'));
+    // Bounded check for settings
+    const settingSnap = await getDocs(query(collection(db, 'settings'), limit(50)));
     const existingSettingIds = new Set<string>();
     settingSnap.forEach((doc) => existingSettingIds.add(doc.id));
-
-    const reviewSnap = await getDocs(collection(db, 'reviews'));
-    const existingReviewIds = new Set<string>();
-    reviewSnap.forEach((doc) => existingReviewIds.add(doc.id));
 
     let hasUpdates = false;
     const batch = writeBatch(db);
 
-    // Sync Missing Categories
+    // Sync Missing Genuine Categories
     for (const cat of INITIAL_CATEGORIES) {
       if (!existingCatIds.has(cat.id)) {
         const ref = doc(db, 'categories', cat.id);
@@ -1046,7 +1074,7 @@ export async function ensureDatabaseSeeded() {
       }
     }
 
-    // Sync Missing Services
+    // Sync Missing Genuine Service Offerings & Standard Pricing
     for (const srv of INITIAL_SERVICES) {
       if (!existingSrvIds.has(srv.id)) {
         const ref = doc(db, 'services', srv.id);
@@ -1055,16 +1083,7 @@ export async function ensureDatabaseSeeded() {
       }
     }
 
-    // Sync Missing Service Professionals
-    for (const pro of INITIAL_SERVICE_MEN) {
-      if (!existingProIds.has(pro.id)) {
-        const ref = doc(db, 'service_men', pro.id);
-        batch.set(ref, pro);
-        hasUpdates = true;
-      }
-    }
-
-    // Sync Missing Settings
+    // Sync Platform Settings
     for (const setting of INITIAL_SETTINGS) {
       if (!existingSettingIds.has(setting.id)) {
         const ref = doc(db, 'settings', setting.id);
@@ -1073,21 +1092,17 @@ export async function ensureDatabaseSeeded() {
       }
     }
 
-    // Sync Initial Verified Reviews if none exist
-    if (existingReviewIds.size === 0) {
-      for (const rev of INITIAL_REVIEWS) {
-        const ref = doc(db, 'reviews', rev.id);
-        batch.set(ref, rev);
-        hasUpdates = true;
-      }
+    if (hasUpdates) {
+      console.log('Syncing authentic categories, service catalogue and settings to Firestore...');
+      await batch.commit();
+      console.log('HARDINKAAM initial database sync committed successfully (no dummy data seeded).');
     }
 
-    if (hasUpdates) {
-      console.log('Syncing newly added categories, services, pros and verified reviews to Firestore...');
-      await batch.commit();
-      console.log('HARDINKAAM initial database seed/sync committed successfully.');
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(seedCheckKey, 'true');
     }
   } catch (err) {
     console.warn('Auto-seed check note:', err);
+    checkAndHandleQuotaError(err);
   }
 }

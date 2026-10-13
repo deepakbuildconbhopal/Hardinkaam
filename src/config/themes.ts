@@ -1002,6 +1002,64 @@ export const FESTIVAL_THEMES: Record<FestivalThemeId, FestivalTheme> = {
     },
     previewPalette: ['#65a30d', '#78716c', '#ea580c', '#292524'],
   },
+
+  darkblue: {
+    id: 'darkblue',
+    name: 'Dark Blue',
+    nameHindi: 'डार्क ब्लू (शाही नेवी ब्लू)',
+    tagline: 'Deep Midnight Navy with Crisp Light Fonts',
+    taglineHindi: 'शाही डार्क ब्लू बैकग्राउंड एवं स्पष्ट लाइट फॉन्ट',
+    description: 'डार्क ब्लू थीम - आँखों के लिए आरामदायक गहरा नीला बैकग्राउंड और स्पष्ट, पठनीय लाइट (सफेद व सिल्वर) फॉन्ट।',
+    greeting: 'Welcome to Hardinkaam Dark Blue Mode',
+    greetingHindi: 'हार्डिनकाम डार्क ब्लू मोड में आपका स्वागत है!',
+    greetingIcon: '🌌🔷',
+    category: 'standard',
+    isDark: true,
+    colors: {
+      primary: '#38bdf8', // Sky Blue-400
+      primaryHover: '#0ea5e9',
+      primaryLight: '#0f172a',
+      primaryDark: '#0284c7',
+      secondary: '#818cf8', // Indigo-400
+      secondaryLight: '#1e1b4b',
+      accent: '#38bdf8',
+      bannerGradient: 'linear-gradient(135deg, #070d1e 0%, #0c1a3a 50%, #172554 100%)',
+      badgeBg: '#1e293b',
+      badgeText: '#93c5fd',
+      headerBorder: '#1e3a8a',
+      backgroundTint: '#070d1e',
+    },
+    previewPalette: ['#070d1e', '#0c1a3a', '#1e3a8a', '#38bdf8'],
+  },
+
+  dark_blue: {
+    id: 'dark_blue',
+    name: 'Dark Blue',
+    nameHindi: 'डार्क ब्लू (शाही नेवी ब्लू)',
+    tagline: 'Deep Midnight Navy with Crisp Light Fonts',
+    taglineHindi: 'शाही डार्क ब्लू बैकग्राउंड एवं स्पष्ट लाइट फॉन्ट',
+    description: 'डार्क ब्लू थीम - आँखों के लिए आरामदायक गहरा नीला बैकग्राउंड और स्पष्ट, पठनीय लाइट (सफेद व सिल्वर) फॉन्ट।',
+    greeting: 'Welcome to Hardinkaam Dark Blue Mode',
+    greetingHindi: 'हार्डिनकाम डार्क ब्लू मोड में आपका स्वागत है!',
+    greetingIcon: '🌌🔷',
+    category: 'standard',
+    isDark: true,
+    colors: {
+      primary: '#38bdf8',
+      primaryHover: '#0ea5e9',
+      primaryLight: '#0f172a',
+      primaryDark: '#0284c7',
+      secondary: '#818cf8',
+      secondaryLight: '#1e1b4b',
+      accent: '#38bdf8',
+      bannerGradient: 'linear-gradient(135deg, #070d1e 0%, #0c1a3a 50%, #172554 100%)',
+      badgeBg: '#1e293b',
+      badgeText: '#93c5fd',
+      headerBorder: '#1e3a8a',
+      backgroundTint: '#070d1e',
+    },
+    previewPalette: ['#070d1e', '#0c1a3a', '#1e3a8a', '#38bdf8'],
+  },
 };
 
 // Populate metadata on every theme from the central festival metadata registry
@@ -1049,6 +1107,7 @@ export const THEME_LIST: FestivalTheme[] = [
   FESTIVAL_THEMES.pongal,
   FESTIVAL_THEMES.maha_shivratri_premium,
   FESTIVAL_THEMES.gandhi_jayanti,
+  FESTIVAL_THEMES.darkblue,
 ];
 
 export const DEFAULT_THEME_ID: FestivalThemeId = 'default';

@@ -28,9 +28,10 @@ import {
   Briefcase,
   ExternalLink,
 } from 'lucide-react';
-import { collection, getDocs, updateDoc, doc, setDoc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, updateDoc, doc, setDoc, getDoc, query, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { UserProfile, UserRole, PasswordResetRequest } from '../../types';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../../utils/sparkQuotaGuard';
 import { useAuth } from '../../context/AuthContext';
 
 interface ManualPasswordResetUtilityProps {
@@ -132,25 +133,29 @@ export const ManualPasswordResetUtility: React.FC<ManualPasswordResetUtilityProp
     return { score, label: 'अति-सुरक्षित / Very Strong', color: 'bg-emerald-600 text-white' };
   }, [newPassword]);
 
-  // Load Users & Audit Logs
+  // Load Users & Audit Logs (bounded & quota-guarded)
   const fetchData = async () => {
+    if (isResourceExhausted()) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      // 1. Fetch Users
-      const snap = await getDocs(collection(db, 'users'));
+      // 1. Fetch Users (capped to 50)
+      const snap = await getDocs(query(collection(db, 'users'), limit(50)));
       const list: any[] = [];
       snap.forEach((d) => list.push({ uid: d.id, ...d.data() }));
       setUsers(list);
 
-      // 2. Fetch Reset Requests
-      const reqSnap = await getDocs(collection(db, 'password_reset_requests'));
+      // 2. Fetch Reset Requests (capped to 25)
+      const reqSnap = await getDocs(query(collection(db, 'password_reset_requests'), limit(25)));
       const reqList: PasswordResetRequest[] = [];
       reqSnap.forEach((d) => reqList.push({ id: d.id, ...d.data() } as PasswordResetRequest));
       setResetRequests(reqList);
 
-      // 3. Fetch Recent Audit Logs for Manual Password Resets
+      // 3. Fetch Recent Audit Logs for Manual Password Resets (capped to 25)
       try {
-        const auditSnap = await getDocs(collection(db, 'audit_logs'));
+        const auditSnap = await getDocs(query(collection(db, 'audit_logs'), limit(25)));
         const resets: ResetLogItem[] = [];
         auditSnap.forEach((d) => {
           const data = d.data();
@@ -172,9 +177,11 @@ export const ManualPasswordResetUtility: React.FC<ManualPasswordResetUtilityProp
         setRecentResets(resets.slice(0, 8));
       } catch (aErr) {
         console.warn('Audit logs read notice:', aErr);
+        checkAndHandleQuotaError(aErr);
       }
     } catch (err) {
       console.warn('Manual reset utility fetch notice:', err);
+      checkAndHandleQuotaError(err);
     } finally {
       setLoading(false);
     }
@@ -247,17 +254,16 @@ export const ManualPasswordResetUtility: React.FC<ManualPasswordResetUtilityProp
         selectedUser.role
       );
 
-      // 2. Extra metadata on user document
+      // 2. Extra metadata on user document (never store plaintext passwords)
       const userRef = doc(db, 'users', selectedUser.uid);
       await updateDoc(userRef, {
-        loginPassword: finalPassword,
         passwordUpdatedAt: new Date().toISOString(),
         passwordResetBy: 'DEEPAK',
         requirePasswordChange: requirePasswordChange,
         resetRequested: false,
       });
 
-      // 3. Log into audit_logs specifically with details
+      // 3. Log into audit_logs specifically with details (without plaintext password)
       try {
         const auditDocId = 'aud_pwd_' + Date.now();
         await setDoc(doc(db, 'audit_logs', auditDocId), {
@@ -270,7 +276,6 @@ export const ManualPasswordResetUtility: React.FC<ManualPasswordResetUtilityProp
           targetUserName: finalName,
           targetEmail: selectedUser.email || '',
           targetRole: selectedUser.role || 'customer',
-          assignedPassword: finalPassword,
           requirePasswordChange: requirePasswordChange,
           note: adminNote.trim() || 'Manual reset performed from Admin Utility',
           timestamp: new Date().toISOString(),
@@ -283,7 +288,6 @@ export const ManualPasswordResetUtility: React.FC<ManualPasswordResetUtilityProp
             targetUserId: selectedUser.uid,
             targetUserName: finalName,
             targetEmail: selectedUser.email || '',
-            assignedPassword: finalPassword,
             performedBy: 'DEEPAK',
             timestamp: new Date().toISOString(),
             note: adminNote.trim(),
@@ -302,7 +306,6 @@ export const ManualPasswordResetUtility: React.FC<ManualPasswordResetUtilityProp
             ? {
                 ...u,
                 name: finalName,
-                loginPassword: finalPassword,
                 passwordUpdatedAt: new Date().toISOString(),
                 resetRequested: false,
               }
@@ -313,14 +316,13 @@ export const ManualPasswordResetUtility: React.FC<ManualPasswordResetUtilityProp
       const updatedUserObj = {
         ...selectedUser,
         name: finalName,
-        loginPassword: finalPassword,
       };
       setSelectedUser(updatedUserObj);
 
       // 5. Trigger success state
       setSuccessInfo({
         user: updatedUserObj,
-        passwordAssigned: finalPassword,
+        passwordAssigned: '•••••••• (Firebase Auth)',
         timestamp: new Date().toISOString(),
       });
 
@@ -352,7 +354,7 @@ export const ManualPasswordResetUtility: React.FC<ManualPasswordResetUtilityProp
   const shareViaWhatsApp = (user: any, pass: string) => {
     const cleanPhone = user.phone ? user.phone.replace(/[^0-9]/g, '') : '';
     const message = encodeURIComponent(
-      `नमस्ते ${user.name},\n\nHARDINKAAM में आपका लॉगिन पासवर्ड एडमिन DEEPAK द्वारा सफलतापूर्वक रीसेट कर दिया गया है:\n\n👤 यूजरनेम: ${user.name}\n📧 लॉगिन ईमेल: ${user.email}\n🔑 नया पासवर्ड: ${pass}\n\n🌐 यहां लॉगिन करें: ${window.location.origin}\n\nकिसी भी सहायता के लिए संपर्क करें: +91 98260 12345`
+      `नमस्ते ${user.name},\n\nHARDINKAAM में आपका लॉगिन पासवर्ड एडमिन DEEPAK द्वारा सफलतापूर्वक रीसेट कर दिया गया है:\n\n👤 यूजरनेम: ${user.name}\n📧 लॉगिन ईमेल: ${user.email}\n🔑 नया पासवर्ड: ${pass}\n\n🌐 यहां लॉगिन करें: ${window.location.origin}\n\nकिसी भी सहायता के लिए संपर्क करें: +91 62675 46945`
     );
     const targetUrl = cleanPhone
       ? `https://wa.me/${cleanPhone.startsWith('91') ? cleanPhone : '91' + cleanPhone}?text=${message}`
@@ -617,33 +619,15 @@ export const ManualPasswordResetUtility: React.FC<ManualPasswordResetUtilityProp
                     </div>
                   </div>
 
-                  {/* Current Password Peek */}
+                  {/* Authentication Security Status */}
                   <div className="sm:text-right border-t sm:border-t-0 pt-2 sm:pt-0 border-amber-200/60">
                     <div className="text-[10px] text-stone-500 uppercase font-bold tracking-wider">
-                      वर्तमान पासवर्ड स्थिति
+                      सुरक्षा प्रमाणीकरण स्थिति
                     </div>
                     <div className="flex items-center sm:justify-end gap-1.5 mt-0.5">
-                      <span className="font-mono text-xs font-bold text-stone-800 bg-white px-2 py-0.5 rounded-md border border-stone-200">
-                        {selectedUser.loginPassword
-                          ? showCurrentPassword
-                            ? selectedUser.loginPassword
-                            : '••••••••'
-                          : 'डिफ़ॉल्ट / Google'}
+                      <span className="font-mono text-xs font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                        Firebase Auth (Encrypted)
                       </span>
-                      {selectedUser.loginPassword && (
-                        <button
-                          type="button"
-                          onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                          className="text-stone-400 hover:text-stone-700 p-1 cursor-pointer"
-                          title="Show/Hide current password"
-                        >
-                          {showCurrentPassword ? (
-                            <EyeOff className="w-3.5 h-3.5" />
-                          ) : (
-                            <Eye className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                      )}
                     </div>
                   </div>
                 </div>

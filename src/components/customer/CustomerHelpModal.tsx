@@ -15,6 +15,9 @@ import {
   Video,
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
+import { useAuth } from '../../context/AuthContext';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '../../firebase/config';
 import { Booking } from '../../types';
 
 interface Props {
@@ -25,6 +28,7 @@ interface Props {
 
 export const CustomerHelpModal: React.FC<Props> = ({ isOpen, onClose, recentBookings = [] }) => {
   const { t, language } = useLanguage();
+  const { currentUser, userProfile } = useAuth();
   const [activeFaq, setActiveFaq] = useState<number | null>(0);
   const [ticketSubject, setTicketSubject] = useState('');
   const [ticketMessage, setTicketMessage] = useState('');
@@ -60,10 +64,38 @@ export const CustomerHelpModal: React.FC<Props> = ({ isOpen, onClose, recentBook
     },
   ];
 
-  const handleSendTicket = (e: React.FormEvent) => {
+  const handleSendTicket = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ticketMessage.trim()) return;
     setTicketSent(true);
+
+    try {
+      const ticketId = `REQ-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      const nowIso = new Date().toISOString();
+      const ticketData = {
+        id: ticketId,
+        subject: ticketSubject.trim() || 'ग्राहक सहायता अनुरोध (Customer Help Request)',
+        message: ticketMessage.trim(),
+        bookingId: selectedBookingId || null,
+        userId: currentUser?.uid || 'guest',
+        userName: userProfile?.name || currentUser?.displayName || 'Customer',
+        userPhone: userProfile?.phone || currentUser?.phoneNumber || '',
+        userEmail: userProfile?.email || currentUser?.email || '',
+        userRole: userProfile?.role || 'customer',
+        category: 'support_ticket',
+        priority: 'high',
+        status: 'pending',
+        channel: 'customer_help_modal',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      await setDoc(doc(db, 'support_tickets', ticketId), ticketData);
+      await setDoc(doc(db, 'admin_requests', ticketId), ticketData);
+    } catch (saveErr) {
+      console.warn('[CustomerHelpModal] Error saving ticket to Firestore:', saveErr);
+    }
+
     setTimeout(() => {
       setTicketSent(false);
       setTicketSubject('');
@@ -99,7 +131,7 @@ export const CustomerHelpModal: React.FC<Props> = ({ isOpen, onClose, recentBook
           {/* Quick Contact Banners */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <a
-              href="tel:+919826012345"
+              href="tel:+916267546945"
               className="p-3.5 rounded-2xl bg-orange-50 border border-orange-200 flex items-center gap-3 hover:bg-orange-100/80 transition-colors"
             >
               <div className="p-2.5 rounded-xl bg-orange-600 text-white">
@@ -109,12 +141,12 @@ export const CustomerHelpModal: React.FC<Props> = ({ isOpen, onClose, recentBook
                 <span className="text-[10px] text-orange-950/70 font-bold uppercase tracking-wider block">
                   Customer Helpline / Toll-Free
                 </span>
-                <span className="text-sm font-black text-orange-950">+91 98260 12345</span>
+                <span className="text-sm font-black text-orange-950">+91 62675 46945</span>
               </div>
             </a>
 
             <a
-              href="https://wa.me/919826012345?text=Hello%20HARDINKAAM%20Support%2C%20I%20need%20assistance%20with%20my%20service."
+              href="https://wa.me/916267546945?text=Hello%20HARDINKAAM%20Support%2C%20I%20need%20assistance%20with%20my%20service."
               target="_blank"
               rel="noopener noreferrer"
               className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center gap-3 hover:bg-emerald-100/80 transition-colors"
@@ -126,13 +158,13 @@ export const CustomerHelpModal: React.FC<Props> = ({ isOpen, onClose, recentBook
                 <span className="text-[10px] text-emerald-800 font-bold uppercase tracking-wider block">
                   WhatsApp Support
                 </span>
-                <span className="text-sm font-black text-emerald-950">+91 98260 12345</span>
+                <span className="text-sm font-black text-emerald-950">+91 62675 46945</span>
               </div>
             </a>
 
             {/* Direct WhatsApp Video Call Help */}
             <a
-              href={`https://wa.me/919826012345?text=${encodeURIComponent(
+              href={`https://wa.me/916267546945?text=${encodeURIComponent(
                 'नमस्ते HARDINKAAM (दीपक बिल्डकॉन) सपोर्ट! मुझे फॉल्ट डायग्नोसिस / रिमोट निरीक्षण के लिए लाइव WhatsApp वीडियो कॉल सहायता चाहिए।'
               )}`}
               target="_blank"
@@ -171,7 +203,7 @@ export const CustomerHelpModal: React.FC<Props> = ({ isOpen, onClose, recentBook
                 S-2, Ashirwad Complex, Zone-1, M.P. Nagar, Bhopal, MP - 462011
               </span>
               <span className="text-[11px] text-stone-500">
-                Mon – Sat: 8:00 AM – 9:00 PM | Helpline: +91 98260 12345
+                Mon – Sat: 8:00 AM – 9:00 PM | Helpline: +91 62675 46945
               </span>
             </div>
           </div>

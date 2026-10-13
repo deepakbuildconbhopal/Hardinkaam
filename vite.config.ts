@@ -6,6 +6,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
   return {
+    logLevel: 'error' as const,
     plugins: [
       react(),
       tailwindcss(),
@@ -23,7 +24,7 @@ export default defineConfig(() => {
           'manifest.webmanifest',
         ],
         manifest: {
-          id: 'https://hardinkaam.com/',
+          id: 'https://www.hardinkaam.online/',
           name: 'HARDINKAAM: On-Demand Home Services',
           short_name: 'HARDINKAAM',
           description: "Bhopal's #1 verified on-demand home services, electrician, plumber, carpenter, AC repair, and civil construction platform by Deepak Buildcon.",
@@ -46,7 +47,7 @@ export default defineConfig(() => {
             },
             {
               platform: 'webapp',
-              url: 'https://hardinkaam.com/manifest.webmanifest',
+              url: 'https://www.hardinkaam.online/manifest.webmanifest',
             },
           ],
           shortcuts: [
@@ -149,12 +150,12 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+          maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2,webmanifest,json}'],
           navigateFallback: '/index.html',
           navigateFallbackDenylist: [
             /^\/__/, // Firebase hosting / auth reserved prefix
-            /^\/api\/.*/, // Backend APIs
+            /\/api\/.*/i, // Backend APIs
             /^https:\/\/identitytoolkit\.googleapis\.com\/.*/,
             /^https:\/\/securetoken\.googleapis\.com\/.*/,
             /^https:\/\/firestore\.googleapis\.com\/.*/,
@@ -170,7 +171,7 @@ export default defineConfig(() => {
             },
             // 2. All Backend APIs & Cloud Functions (booking mutations, Razorpay checkout, payouts, split calculations)
             {
-              urlPattern: /^\/api\/.*/i,
+              urlPattern: /\/api\/.*/i,
               handler: 'NetworkOnly',
             },
             // 3. Sensitive Firebase Auth & Token services
@@ -244,8 +245,42 @@ export default defineConfig(() => {
     server: {
       port: 3000,
       host: '0.0.0.0',
-      hmr: process.env.DISABLE_HMR !== 'true',
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      hmr: false,
+    },
+    build: {
+      chunkSizeWarningLimit: 1200,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('react') || id.includes('react-dom') || id.includes('scheduler')) {
+                return 'vendor_react';
+              }
+              if (id.includes('firebase')) {
+                return 'vendor_firebase';
+              }
+              if (id.includes('@vis.gl') || id.includes('google.maps')) {
+                return 'vendor_maps';
+              }
+              if (id.includes('lucide-react')) {
+                return 'vendor_icons';
+              }
+              if (id.includes('motion')) {
+                return 'vendor_motion';
+              }
+              if (id.includes('jspdf') || id.includes('jspdf-autotable') || id.includes('html2canvas') || id.includes('purify')) {
+                return 'vendor_pdf';
+              }
+              if (id.includes('xlsx')) {
+                return 'vendor_xlsx';
+              }
+              if (id.includes('recharts')) {
+                return 'vendor_charts';
+              }
+            }
+          },
+        },
+      },
     },
   };
 });

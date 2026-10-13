@@ -49,19 +49,86 @@
   border-color: var(--theme-header-border, #fdba74) !important;
 }
 
+/* Glassmorphism & Modern Design System */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+}
+
+.glass-dark {
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.3);
+}
+
+.button-shadow-md {
+  box-shadow: 0 4px 14px rgba(234, 88, 12, 0.35);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.button-shadow-md:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 6px 20px rgba(234, 88, 12, 0.5);
+}
+
+.button-shadow-md:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.blob-container {
+  border-radius: 30% 70% 70% 30% / 30% 30% 70% 70%;
+  transition: all 0.5s ease-in-out;
+}
+
+.blob-container-alt {
+  border-radius: 60% 40% 30% 70% / 50% 60% 40% 50%;
+  transition: all 0.5s ease-in-out;
+}
+
+@keyframes entryAnimation {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-entry {
+  animation: entryAnimation 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
 /* PWA App-like and Safe-Area Enhancements */
 html {
   overflow-x: hidden;
+  overflow-y: auto;
   width: 100%;
+  min-height: 100%;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
+  scroll-behavior: smooth;
 }
 
 body {
   overflow-x: hidden;
+  overflow-y: auto;
   width: 100%;
-  min-height: 100%;
-  overscroll-behavior-y: contain;
+  min-height: 100vh;
 }
 
 button, a, input, select {
@@ -73,4 +140,358 @@ button, a, input, select {
     padding-bottom: env(safe-area-inset-bottom);
   }
 }
+
+
+/* =========================================================
+   HARDINKAAM — GLOBAL PREMIUM UI SYSTEM
+   Shared visual layer for landing, customer, pro, partner,
+   franchise and admin surfaces. Keeps functionality intact.
+   ========================================================= */
+:root {
+  --hk-bg: #f6f8fc;
+  --hk-surface: rgba(255,255,255,.92);
+  --hk-surface-solid: #ffffff;
+  --hk-ink: #172033;
+  --hk-muted: #667085;
+  --hk-line: rgba(15,23,42,.09);
+  --hk-primary: #f97316;
+  --hk-primary-2: #fb923c;
+  --hk-blue: #2563eb;
+  --hk-violet: #7c3aed;
+  --hk-radius: 18px;
+  --hk-shadow: 0 12px 35px rgba(15,23,42,.08);
+  --hk-shadow-hover: 0 18px 45px rgba(15,23,42,.13);
+}
+
+html { scroll-behavior: smooth; }
+body {
+  color: var(--hk-ink);
+  background:
+    radial-gradient(circle at 8% 0%, rgba(249,115,22,.08), transparent 28rem),
+    radial-gradient(circle at 92% 12%, rgba(37,99,235,.07), transparent 30rem),
+    var(--hk-bg);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Shared surfaces */
+.glass-panel, .glass-card {
+  background: var(--hk-surface);
+  border: 1px solid rgba(255,255,255,.72);
+  box-shadow: var(--hk-shadow);
+  border-radius: var(--hk-radius);
+}
+.glass-card:hover { box-shadow: var(--hk-shadow-hover); }
+
+/* Modern cards used across dashboards */
+[class*="rounded-2xl"], [class*="rounded-3xl"] {
+  transition: box-shadow .22s ease, transform .22s ease, border-color .22s ease;
+}
+
+/* Interactive controls */
+button, [role="button"] {
+  -webkit-tap-highlight-color: transparent;
+}
+button:not(:disabled):hover, [role="button"]:not([aria-disabled="true"]):hover {
+  filter: brightness(1.02);
+}
+button:not(:disabled):active, [role="button"]:active {
+  transform: translateY(1px);
+}
+
+/* Premium shine for clearly interactive controls */
+button.bg-theme-primary,
+button[class*="bg-orange"],
+button[class*="bg-blue"],
+button[class*="bg-indigo"],
+button[class*="bg-violet"],
+a[class*="bg-theme-primary"],
+a[class*="bg-orange"],
+a[class*="bg-blue"] {
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 8px 22px rgba(15,23,42,.10);
+}
+button.bg-theme-primary::after,
+button[class*="bg-orange"]::after,
+button[class*="bg-blue"]::after,
+button[class*="bg-indigo"]::after,
+button[class*="bg-violet"]::after,
+a[class*="bg-theme-primary"]::after,
+a[class*="bg-orange"]::after,
+a[class*="bg-blue"]::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 -120%;
+  width: 55%;
+  transform: skewX(-20deg);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.28), transparent);
+  transition: left .65s ease;
+  pointer-events: none;
+}
+button.bg-theme-primary:hover::after,
+button[class*="bg-orange"]:hover::after,
+button[class*="bg-blue"]:hover::after,
+button[class*="bg-indigo"]:hover::after,
+button[class*="bg-violet"]:hover::after,
+a[class*="bg-theme-primary"]:hover::after,
+a[class*="bg-orange"]:hover::after,
+a[class*="bg-blue"]:hover::after { left: 130%; }
+
+/* Inputs/selects/textareas */
+input:not([type="checkbox"]):not([type="radio"]),
+select, textarea {
+  border-color: rgba(15,23,42,.12);
+  border-radius: 12px;
+  transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+}
+input:not([type="checkbox"]):not([type="radio"]):focus,
+select:focus, textarea:focus {
+  outline: none;
+  border-color: rgba(249,115,22,.55);
+  box-shadow: 0 0 0 4px rgba(249,115,22,.10);
+}
+
+/* Common dialog/modal surfaces */
+[role="dialog"] {
+  max-width: min(94vw, 760px);
+  max-height: min(92dvh, 900px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 22px;
+  box-shadow: 0 28px 90px rgba(15,23,42,.24);
+}
+
+/* Sticky navigation / dashboard headers */
+header, nav {
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+/* Tables on admin screens */
+table { border-collapse: separate; border-spacing: 0; }
+thead th { background: rgba(248,250,252,.9); }
+tbody tr { transition: background .16s ease; }
+tbody tr:hover { background: rgba(249,115,22,.035); }
+
+/* Explicit, highly visible scrollbars for modal windows and scrollable centers */
+.custom-scrollbar {
+  scrollbar-width: thin !important;
+  scrollbar-color: #3b82f6 rgba(15, 23, 42, 0.08) !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px !important;
+  height: 8px !important;
+  display: block !important;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.06) !important;
+  border-radius: 9999px !important;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #3b82f6 !important;
+  border-radius: 9999px !important;
+  border: 2px solid transparent !important;
+  background-clip: padding-box !important;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #1d4ed8 !important;
+}
+
+body:not(:has(.hdk-landing)) .custom-scrollbar {
+  scrollbar-color: #3b82f6 rgba(255, 255, 255, 0.1) !important;
+}
+
+body:not(:has(.hdk-landing)) .custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+body:not(:has(.hdk-landing)) .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #3b82f6, #60a5fa) !important;
+}
+
+/* Scrollbars: subtle on desktop, native feel on touch */
+@media (pointer: fine) {
+  * { scrollbar-width: thin; scrollbar-color: rgba(100,116,139,.38) transparent; }
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: rgba(100,116,139,.32); border-radius: 99px; }
+  *::-webkit-scrollbar-thumb:hover { background: rgba(100,116,139,.5); }
+}
+
+/* Responsive polish */
+@media (max-width: 767px) {
+  :root { --hk-radius: 15px; }
+  [role="dialog"] {
+    width: min(94vw, 520px);
+    max-height: 88dvh;
+    border-radius: 18px;
+  }
+}
+@media (min-width: 768px) and (max-width: 1279px) {
+  [role="dialog"] { max-width: min(90vw, 680px); }
+}
+@media (min-width: 1600px) {
+  body { font-size: 16.5px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}
+
+/* =========================================================
+   DARK BLUE THEME — LIGHT FONTS & RICH NAVY SURFACES
+   When active theme is darkblue, ensure all text is crisp light
+   color (#f8fafc / #cbd5e1) for high-contrast accessibility.
+   ========================================================= */
+html.theme-darkblue,
+[data-theme="darkblue"],
+[data-theme-mode="dark"] {
+  color-scheme: dark;
+}
+
+html.theme-darkblue body,
+[data-theme="darkblue"] body {
+  background:
+    radial-gradient(circle at 10% 0%, rgba(56, 189, 248, 0.12), transparent 32rem),
+    radial-gradient(circle at 90% 15%, rgba(99, 102, 241, 0.12), transparent 35rem),
+    #070d1e !important;
+  color: #f8fafc !important;
+}
+
+/* Light typography for dark blue theme */
+html.theme-darkblue h1,
+html.theme-darkblue h2,
+html.theme-darkblue h3,
+html.theme-darkblue h4,
+html.theme-darkblue h5,
+html.theme-darkblue h6,
+[data-theme="darkblue"] h1,
+[data-theme="darkblue"] h2,
+[data-theme="darkblue"] h3,
+[data-theme="darkblue"] h4,
+[data-theme="darkblue"] h5,
+[data-theme="darkblue"] h6 {
+  color: #f8fafc !important;
+}
+
+/* Light font overrides for hardcoded dark text classes */
+html.theme-darkblue .text-stone-900,
+html.theme-darkblue .text-stone-800,
+html.theme-darkblue .text-stone-700,
+html.theme-darkblue .text-gray-900,
+html.theme-darkblue .text-gray-800,
+html.theme-darkblue .text-gray-700,
+html.theme-darkblue .text-slate-900,
+html.theme-darkblue .text-slate-800,
+html.theme-darkblue .text-neutral-900,
+html.theme-darkblue .text-black,
+[data-theme="darkblue"] .text-stone-900,
+[data-theme="darkblue"] .text-stone-800,
+[data-theme="darkblue"] .text-stone-700,
+[data-theme="darkblue"] .text-gray-900,
+[data-theme="darkblue"] .text-gray-800,
+[data-theme="darkblue"] .text-gray-700,
+[data-theme="darkblue"] .text-slate-900,
+[data-theme="darkblue"] .text-slate-800,
+[data-theme="darkblue"] .text-black {
+  color: #f8fafc !important;
+}
+
+html.theme-darkblue .text-stone-600,
+html.theme-darkblue .text-stone-500,
+html.theme-darkblue .text-gray-600,
+html.theme-darkblue .text-gray-500,
+html.theme-darkblue .text-slate-600,
+html.theme-darkblue .text-slate-500,
+[data-theme="darkblue"] .text-stone-600,
+[data-theme="darkblue"] .text-stone-500,
+[data-theme="darkblue"] .text-gray-600,
+[data-theme="darkblue"] .text-gray-500 {
+  color: #cbd5e1 !important;
+}
+
+html.theme-darkblue .text-stone-400,
+html.theme-darkblue .text-gray-400,
+html.theme-darkblue .text-slate-400,
+[data-theme="darkblue"] .text-stone-400,
+[data-theme="darkblue"] .text-gray-400 {
+  color: #94a3b8 !important;
+}
+
+/* Card & Surface styling for dark blue theme */
+html.theme-darkblue .bg-white:not(button):not(.bg-white\/20):not(.bg-white\/10):not(.badge-pill),
+[data-theme="darkblue"] .bg-white:not(button):not(.bg-white\/20):not(.bg-white\/10) {
+  background-color: #0f172a !important;
+  border-color: #1e293b !important;
+  color: #f8fafc !important;
+}
+
+html.theme-darkblue .bg-stone-50,
+html.theme-darkblue .bg-gray-50,
+html.theme-darkblue .bg-slate-50,
+[data-theme="darkblue"] .bg-stone-50,
+[data-theme="darkblue"] .bg-gray-50 {
+  background-color: #131c31 !important;
+  border-color: #1e293b !important;
+  color: #f8fafc !important;
+}
+
+html.theme-darkblue .bg-stone-100,
+html.theme-darkblue .bg-gray-100,
+[data-theme="darkblue"] .bg-stone-100 {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+}
+
+/* Inputs, Selects & Textareas in Dark Blue Theme */
+html.theme-darkblue input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+html.theme-darkblue select,
+html.theme-darkblue textarea,
+[data-theme="darkblue"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+[data-theme="darkblue"] select,
+[data-theme="darkblue"] textarea {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+}
+
+html.theme-darkblue input::placeholder,
+html.theme-darkblue textarea::placeholder,
+[data-theme="darkblue"] input::placeholder,
+[data-theme="darkblue"] textarea::placeholder {
+  color: #64748b !important;
+}
+
+/* Modal Dialogs in Dark Blue Theme */
+html.theme-darkblue [role="dialog"],
+[data-theme="darkblue"] [role="dialog"] {
+  background-color: #0f172a !important;
+  border-color: #1e293b !important;
+  color: #f8fafc !important;
+}
+
+/* Header, Navbar & Navigation in Dark Blue Theme */
+html.theme-darkblue header,
+[data-theme="darkblue"] header {
+  background-color: rgba(15, 23, 42, 0.95) !important;
+  border-bottom-color: rgba(30, 41, 59, 0.8) !important;
+}
+
+html.theme-darkblue header .bg-clip-text,
+[data-theme="darkblue"] header .bg-clip-text {
+  background-image: linear-gradient(to right, #ffffff, #93c5fd, #38bdf8) !important;
+}
+
+html.theme-darkblue nav,
+[data-theme="darkblue"] nav {
+  border-color: rgba(30, 41, 59, 0.8) !important;
+}
+
 

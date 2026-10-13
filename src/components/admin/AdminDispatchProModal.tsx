@@ -142,7 +142,7 @@ export const AdminDispatchProModal: React.FC<Props> = ({
           serviceManPhone: selectedPro.phone,
           partnerId: selectedPro.partnerId || '',
           status: targetStatus,
-          dispatchNotes: dispatchNotes.trim() || undefined,
+          dispatchNotes: dispatchNotes.trim() || '',
           dispatchedAt: now,
           updatedAt: now,
         });

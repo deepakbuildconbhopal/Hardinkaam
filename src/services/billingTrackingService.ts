@@ -1,6 +1,13 @@
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { ExtraChargeItem, BillSnapshot } from '../types';
+import { ExtraChargeItem, BillSnapshot, Booking } from '../types';
+import { apiPost } from '../utils/apiHandler';
+import {
+  notifyExtraChargeRequested,
+  notifyExtraChargeDecision,
+  notifyWorkCompleted,
+  notifyFinalBillGenerated,
+} from './bookingNotificationIntegrationService';
 
 export interface ProposeExtraChargeParams {
   bookingId: string;
@@ -29,124 +36,70 @@ export interface CompleteWorkParams {
 
 export interface CurrentBillBreakdown {
   baseAmount: number;
+  approvedExtraChargesAmount?: number;
   extraServicesAmount: number;
   materialsAmount: number;
+  applicableCharges?: number;
+  discount?: number;
   pendingTotal: number;
   currentEstimatedFinal: number;
   approvedCount: number;
   pendingCount: number;
+  rejectedCount?: number;
 }
 
 /**
  * Propose an additional service or material charge.
- * Calls server endpoint /api/bookings/propose-extra-charge with fallback.
+ * Calls authoritative server endpoint /api/bookings/propose-extra-charge with authenticated Firebase Token.
  */
 export async function proposeExtraChargeServer(
   params: ProposeExtraChargeParams
 ): Promise<{ success: boolean; charge?: ExtraChargeItem; error?: string }> {
   try {
-    const res = await fetch('/api/bookings/propose-extra-charge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
+    const res = await apiPost('/api/bookings/propose-extra-charge', params);
 
-    const data = await res.json();
-    if (res.ok && data.success) {
-      return { success: true, charge: data.charge };
+    if (res.ok && res.data?.success) {
+      // Trigger customer notification
+      try {
+        const snap = await getDoc(doc(db, 'bookings', params.bookingId));
+        if (snap.exists() && res.data.charge) {
+          notifyExtraChargeRequested(snap.data() as Booking, res.data.charge).catch(() => {});
+        }
+      } catch (_) {}
+
+      return { success: true, charge: res.data.charge };
     }
-    return { success: false, error: data.error || 'Failed to propose extra charge' };
+    return { success: false, error: res.error || res.data?.error || 'Failed to propose extra charge' };
   } catch (err: any) {
-    console.warn('Network issue calling server propose endpoint, attempting client fallback:', err);
-    // Fallback: direct firestore append of pending charge
-    try {
-      const bookingRef = doc(db, 'bookings', params.bookingId);
-      const snap = await getDoc(bookingRef);
-      if (!snap.exists()) return { success: false, error: 'Booking not found' };
-
-      const bData = snap.data();
-      const numQty = Math.max(1, Number(params.quantity) || 1);
-      const numPrice = Math.max(0, Number(params.unitPrice) || 0);
-      const total = numQty * numPrice;
-      const nowIso = new Date().toISOString();
-
-      const newCharge: ExtraChargeItem = {
-        id: `chg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        type: params.type,
-        description: params.description.trim(),
-        quantity: numQty,
-        unitPrice: numPrice,
-        total,
-        addedBy: params.serviceManId,
-        addedByName: params.serviceManName || bData.serviceManName || 'Service Professional',
-        addedAt: nowIso,
-        status: 'pending',
-      };
-
-      const existing = Array.isArray(bData.extraCharges) ? bData.extraCharges : [];
-      await updateDoc(bookingRef, {
-        extraCharges: [...existing, newCharge],
-        updatedAt: nowIso,
-      });
-
-      return { success: true, charge: newCharge };
-    } catch (fallbackErr: any) {
-      return { success: false, error: fallbackErr.message || 'Error proposing charge' };
-    }
+    console.error('Error calling propose extra charge API:', err);
+    return { success: false, error: err.message || 'Error proposing extra charge' };
   }
 }
 
 /**
  * Customer approves or rejects a proposed extra charge.
- * Calls server endpoint /api/bookings/respond-extra-charge with fallback.
+ * Calls authoritative server endpoint /api/bookings/respond-extra-charge.
  */
 export async function respondExtraChargeServer(
   params: RespondExtraChargeParams
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch('/api/bookings/respond-extra-charge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
+    const res = await apiPost('/api/bookings/respond-extra-charge', params);
 
-    const data = await res.json();
-    if (res.ok && data.success) {
+    if (res.ok && res.data?.success) {
+      try {
+        const snap = await getDoc(doc(db, 'bookings', params.bookingId));
+        if (snap.exists()) {
+          notifyExtraChargeDecision(snap.data() as Booking, { id: params.chargeId, description: '', total: 0 } as any, params.decision === 'approve').catch(() => {});
+        }
+      } catch (_) {}
+
       return { success: true };
     }
-    return { success: false, error: data.error || 'Failed to respond to charge' };
+    return { success: false, error: res.error || res.data?.error || 'Failed to submit response' };
   } catch (err: any) {
-    console.warn('Network issue calling server respond endpoint, attempting client fallback:', err);
-    try {
-      const bookingRef = doc(db, 'bookings', params.bookingId);
-      const snap = await getDoc(bookingRef);
-      if (!snap.exists()) return { success: false, error: 'Booking not found' };
-
-      const bData = snap.data();
-      const existing: ExtraChargeItem[] = Array.isArray(bData.extraCharges) ? bData.extraCharges : [];
-      const idx = existing.findIndex((c) => c.id === params.chargeId);
-      if (idx === -1) return { success: false, error: 'Charge not found' };
-
-      const isApproved = params.decision === 'approve';
-      const nowIso = new Date().toISOString();
-
-      existing[idx] = {
-        ...existing[idx],
-        status: isApproved ? 'approved' : 'rejected',
-        approvedBy: isApproved ? params.customerId : undefined,
-        approvedAt: isApproved ? nowIso : undefined,
-        rejectionReason: !isApproved ? (params.rejectionReason || 'Declined by customer') : undefined,
-      };
-
-      await updateDoc(bookingRef, {
-        extraCharges: existing,
-        updatedAt: nowIso,
-      });
-
-      return { success: true };
-    } catch (fallbackErr: any) {
-      return { success: false, error: fallbackErr.message || 'Error updating charge response' };
-    }
+    console.error('Error calling respond extra charge API:', err);
+    return { success: false, error: err.message || 'Error responding to extra charge' };
   }
 }
 
@@ -158,21 +111,26 @@ export async function completeWorkServer(
   params: CompleteWorkParams
 ): Promise<{ success: boolean; finalBill?: BillSnapshot; finalAmount?: number; error?: string }> {
   try {
-    const res = await fetch('/api/bookings/complete-work', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
+    const res = await apiPost('/api/bookings/complete-work', params);
 
-    const data = await res.json();
-    if (res.ok && data.success) {
+    if (res.ok && res.data?.success) {
+      try {
+        const snap = await getDoc(doc(db, 'bookings', params.bookingId));
+        if (snap.exists()) {
+          const bData = snap.data() as Booking;
+          const finalAmt = res.data.finalAmount || res.data.finalBill?.finalPayableAmount || bData.finalAmount || bData.amount;
+          notifyWorkCompleted(bData, finalAmt).catch(() => {});
+          notifyFinalBillGenerated(bData, finalAmt).catch(() => {});
+        }
+      } catch (_) {}
+
       return {
         success: true,
-        finalBill: data.finalBill,
-        finalAmount: data.finalAmount,
+        finalBill: res.data.finalBill,
+        finalAmount: res.data.finalAmount,
       };
     }
-    return { success: false, error: data.error || 'Failed to complete work' };
+    return { success: false, error: res.error || res.data?.error || 'Failed to complete work' };
   } catch (err: any) {
     console.error('Network failure calling complete-work server API:', err);
     return {
@@ -189,16 +147,11 @@ export async function calculateCurrentBillServer(
   bookingId: string
 ): Promise<{ success: boolean; breakdown?: CurrentBillBreakdown; error?: string }> {
   try {
-    const res = await fetch('/api/bookings/calculate-current-bill', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bookingId }),
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      return { success: true, breakdown: data.breakdown };
+    const res = await apiPost('/api/bookings/calculate-current-bill', { bookingId });
+    if (res.ok && res.data?.success) {
+      return { success: true, breakdown: res.data.breakdown };
     }
-    return { success: false, error: data.error };
+    return { success: false, error: res.error || res.data?.error };
   } catch (err: any) {
     return { success: false, error: err.message };
   }

@@ -68,7 +68,7 @@ export const AdminFranchiseKYCVerification: React.FC<Props> = ({
   const [previewDoc, setPreviewDoc] = useState<KYCDocumentRecord | null>(null);
 
   // Activation check state for selected partner
-  const [activationCheck, setActivationCheck] = useState<{ canActivate: boolean; reasons: string[] }>({
+  const [activationCheck, setActivationCheck] = useState<{ canActivate: boolean; reasons: string[]; checklist?: any }>({
     canActivate: false,
     reasons: [],
   });

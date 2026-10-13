@@ -1,4 +1,4 @@
-export type UserRole = 'customer' | 'service_man' | 'business_partner' | 'admin' | 'franchise_admin';
+export type UserRole = 'customer' | 'service_man' | 'business_partner' | 'brand_promoter' | 'admin' | 'franchise_admin';
 
 export interface FranchisePartnerPermissions {
   manageCustomers: boolean;
@@ -29,6 +29,12 @@ export interface DistrictSettings {
   serviceRadiusKm?: number;
   customNotice?: string;
   coveredPincodes?: string[];
+  // District-specific booking alert controls (Franchise Admin accessible)
+  districtAlarmEnabled?: boolean;
+  districtOfferExpirySeconds?: number;
+  districtMaxAlertAttempts?: number;
+  districtAlertCustomNotice?: string;
+  districtCategoryExclusions?: string[];
 }
 
 export interface FranchiseAgreementDocument {
@@ -179,6 +185,8 @@ export interface FranchisePartner {
   franchisePartnerId: string;
   franchiseCode: string; // e.g. HDK-GWL-001, HDK-BPL-001
   name: string;
+  ownerName?: string;
+  businessName?: string;
   email: string;
   phone: string;
   assignedDistrictId: string; // e.g. "district_gwalior" or "gwalior"
@@ -215,9 +223,18 @@ export interface FranchisePartner {
 export interface UserProfile {
   id: string;
   name: string;
+  fullName?: string;
+  fatherName?: string;
+  motherName?: string;
+  noCriminalRecordOath?: boolean;
   email: string;
   phone?: string;
+  phoneNumber?: string;
   role: UserRole;
+  isAdmin?: boolean;
+  isSuperAdmin?: boolean;
+  memberCode?: string;
+  referralCode?: string;
   avatar?: string;
   address?: string;
   city?: string;
@@ -229,16 +246,26 @@ export interface UserProfile {
   assignedDistrictName?: string;
   franchiseCode?: string;
   franchisePartnerId?: string;
-  status: 'active' | 'suspended' | 'pending';
+  businessName?: string;
+  zone?: string;
+  partnerLicenseNumber?: string;
+  status: 'active' | 'suspended' | 'pending' | 'pending_approval' | 'rejected';
   registrationFeePaid?: boolean;
   registrationFeeAmount?: number;
-  registrationPaymentId?: string;
-  registrationOrderId?: string;
-  registrationPaidAt?: string;
+  registrationPaymentMethod?: 'online' | 'cash' | 'razorpay';
+  registrationPaymentStatus?: 'pending_cash_approval' | 'approved' | 'rejected' | 'completed' | 'pending_payment';
+  approvalStatus?: 'pending' | 'approved' | 'rejected';
+  approvedAt?: string;
+  approvedBy?: string;
+  cashRequestedAt?: string;
+  registrationPaymentId?: string | null;
+  registrationOrderId?: string | null;
+  registrationPaidAt?: string | null;
   payoutUpiId?: string;
   bankAccountNumber?: string;
   bankIfsc?: string;
   bankAccountHolderName?: string;
+  // DEPRECATED: Plaintext login passwords removed from database for security compliance
   loginPassword?: string;
   resetRequested?: boolean;
   resetRequestedAt?: string;
@@ -264,6 +291,25 @@ export interface PasswordResetRequest {
   notes?: string;
 }
 
+export interface RegistrationApproval {
+  id: string;
+  userId: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: UserRole;
+  memberCode: string;
+  amount: number;
+  paymentMethod: 'cash' | 'razorpay';
+  status: 'pending' | 'approved' | 'rejected';
+  requestedAt: string;
+  avatar?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  rejectedAt?: string;
+  rejectionReason?: string;
+}
+
 export interface Category {
   id: string;
   name: string;
@@ -282,6 +328,7 @@ export interface Service {
   name: string;
   description: string;
   basePrice: number;
+  price?: number;
   priceUnit: string;
   durationMinutes: number;
   imageUrl?: string;
@@ -297,20 +344,25 @@ export interface ServiceMan {
   phone: string;
   email: string;
   photoUrl?: string;
+  profileImage?: string;
   categoryIds: string[];
   categoryNames: string[];
+  skills?: string[];
+  trade?: string;
   serviceArea: string;
   city?: string;
   districtId?: string;
   districtName?: string;
+  assignedDistrictName?: string;
   franchisePartnerId?: string;
   experienceYears: number;
   hourlyRate: number;
   isAvailable: boolean;
   isVerified: boolean;
-  kycStatus: 'pending' | 'verified' | 'rejected';
+  kycStatus: 'pending' | 'verified' | 'rejected' | 'approved';
   rating: number;
   totalJobs: number;
+  completedBookings?: number;
   partnerId?: string;
   createdAt?: string;
 }
@@ -337,6 +389,8 @@ export type BookingStatus =
   | 'on_the_way'
   | 'arriving'
   | 'arrived'
+  | 'dispatched'
+  | 'confirmed'
   | 'otp_pending'
   | 'in_progress'
   | 'work_started'
@@ -344,7 +398,8 @@ export type BookingStatus =
   | 'work_completed'
   | 'cancelled'
   | 'rejected'
-  | 'service_man_unable_to_reach';
+  | 'service_man_unable_to_reach'
+  | 'unable_to_reach';
 
 export type TrackingStatus =
   | 'assigned'
@@ -359,7 +414,8 @@ export type TrackingStatus =
   | 'COMPLETED'
   | 'completed'
   | 'cancelled'
-  | 'service_man_unable_to_reach';
+  | 'service_man_unable_to_reach'
+  | 'unable_to_reach';
 
 export type BookingOfferStatus =
   | 'PENDING'
@@ -440,13 +496,15 @@ export interface ServiceTrackingDocument {
   trackingEndedAt?: string;
 }
 
-export type PaymentStatus = 'unpaid' | 'paid' | 'refunded' | 'cod';
+export type PaymentStatus = 'unpaid' | 'paid' | 'refunded' | 'cod' | 'pending';
 export type PaymentMethod = 'cash' | 'upi' | 'card' | 'wallet' | 'razorpay' | 'online';
 
 export const REGISTRATION_FEES = {
   customer: 121,
   service_man: 121,
   business_partner: 1021,
+  field_officer: 2021,
+  franchise_partner: 2021,
   admin: 0,
 } as const;
 
@@ -500,8 +558,27 @@ export interface Booking {
   franchisePartnerId?: string;
   franchiseCode?: string;
   pincode?: string;
+  // Phase 9: Conversational Location Experience fields
+  houseFlat?: string;
+  street?: string;
+  area?: string;
+  state?: string;
+  landmark?: string;
+  latitude?: number;
+  longitude?: number;
+  locationSource?: 'gps' | 'map' | 'manual' | 'saved';
   notes?: string;
   amount: number;
+  totalAmount?: number;
+  customerAddress?: string;
+  timeSlot?: string;
+  date?: string;
+  stateName?: string;
+  payoutReference?: string;
+  unableToReach?: boolean;
+  isUnableToReach?: boolean;
+  userId?: string;
+  userName?: string;
   estimatedCharge?: number;
   approxDistanceKm?: number;
   approxDistanceText?: string;
@@ -514,6 +591,11 @@ export interface Booking {
   companyCommission?: number;
   franchiseCommission?: number;
   taxDeduction?: number;
+  taxRate?: number;
+  sacCode?: string;
+  gstAmount?: number;
+  statutoryTaxLiability?: number;
+  taxCalculation?: any;
   servicemanPayoutAmount?: number;
   payoutStatus?: 'pending' | 'processing' | 'paid';
   payoutRazorpayId?: string;
@@ -546,6 +628,11 @@ export interface Booking {
   workDurationFormatted?: string;
   workStatus?: 'not_started' | 'in_progress' | 'completed';
   baseAmount?: number;
+  approvedExtraChargesAmount?: number;
+  applicableCharges?: number;
+  discount?: number;
+  discountAmount?: number;
+  couponCode?: string;
   extraCharges?: ExtraChargeItem[];
   finalBill?: BillSnapshot;
   finalAmount?: number;
@@ -581,6 +668,16 @@ export interface Booking {
   customerAvailabilityStatus?: 'available' | 'call_before_arriving' | 'not_at_home';
   customerLandmarkNote?: string;
   customerAvailabilityUpdatedAt?: string;
+  // Cash Payment Transaction Tracking Fields
+  cashPaymentStatus?: 'pending_approval' | 'approved' | 'rejected' | 'none';
+  cashTransactionId?: string;
+  cashRequestedAt?: string;
+  cashRequestedBy?: string;
+  // Offline Synchronization Queue Fields
+  isOfflinePending?: boolean;
+  offlineQueuedAt?: string;
+  offlineSyncStatus?: 'pending' | 'syncing' | 'synced' | 'failed';
+  offlineSyncError?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -592,6 +689,7 @@ export interface ExtraChargeItem {
   quantity: number;
   unitPrice: number;
   total: number;
+  approvalStatus?: 'pending' | 'approved' | 'rejected';
   addedBy: string;
   addedByName?: string;
   addedAt: string;
@@ -624,19 +722,25 @@ export interface BillSnapshot {
   districtId?: string;
   districtName?: string;
   workStartedAt?: string;
+  workCompletedAt?: string;
   workEndedAt?: string;
   workDurationMinutes?: number;
   workDurationFormatted?: string;
   baseAmount: number;
+  approvedExtraChargesAmount?: number;
   extraServicesAmount: number;
   materialsAmount: number;
+  applicableCharges?: number;
   platformChargeAmount: number;
+  discount?: number;
+  discountAmount?: number;
   taxAmount: number;
   finalAmount: number;
   lineItems: BillLineItem[];
   paymentStatus: PaymentStatus;
   paymentMethod: PaymentMethod;
   generatedAt: string;
+  notes?: string;
 }
 
 export interface Payment {
@@ -644,10 +748,92 @@ export interface Payment {
   bookingId: string;
   customerId: string;
   amount: number;
-  method: PaymentMethod;
-  status: 'pending' | 'completed' | 'failed' | 'refunded';
+  currency?: string;
+  method?: PaymentMethod;
+  paymentMethod?: PaymentMethod;
+  status: 'pending' | 'completed' | 'failed' | 'refunded' | 'captured';
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
   transactionReference?: string;
+  verifiedAt?: string;
+  refundStatus?: 'none' | 'pending' | 'completed' | 'failed';
+  refundAmount?: number;
+  refundedAt?: string;
+  attribution?: {
+    customerId?: string;
+    serviceManId?: string;
+    partnerId?: string;
+    brandPromoterId?: string;
+    franchisePartnerId?: string;
+    districtId?: string;
+  };
+  commissionProcessingStatus?: 'pending' | 'processing' | 'completed' | 'failed' | 'reversed';
+  ledgerProcessingStatus?: 'pending' | 'completed' | 'reversed';
+  commissionBreakdown?: CommissionBreakdown;
   createdAt: string;
+  updatedAt?: string;
+}
+
+export type LedgerOwnerRole = 'company' | 'franchise' | 'partner' | 'brand_promoter' | 'service_man';
+export type CommissionType = 'company_share' | 'franchise_commission' | 'partner_commission' | 'serviceman_earning' | 'tax_deduction' | 'reversal';
+export type LedgerStatus = 'cleared' | 'pending' | 'reversed';
+
+export interface LedgerEntry {
+  id: string; // e.g. LEDGER-{bookingId}-{paymentId}-{role}
+  ledgerOwnerId: string;
+  ledgerOwnerRole: LedgerOwnerRole;
+  ledgerOwnerName?: string;
+  bookingId: string;
+  paymentId: string;
+  razorpayOrderId?: string;
+  commissionType: CommissionType;
+  amount: number;
+  grossBookingAmount: number;
+  ratePercent: number;
+  ruleReference: string;
+  type: 'credit' | 'debit';
+  status: LedgerStatus;
+  description: string;
+  referenceId: string; // COMM-{bookingId}-{paymentId}
+  direction?: 'CREDIT_EARNING' | 'PAYABLE_TO_HARDINKAAM';
+  isPayableToHardinkaam?: boolean;
+  collectionStatus?: 'pending' | 'partially_paid' | 'paid' | 'overdue';
+  isReversed?: boolean;
+  reversalReason?: string;
+  reversalReferenceId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CommissionBreakdown {
+  grossAmount: number;
+  companyShare: number;
+  companyRatePercent: number;
+  franchiseCommission: number; // Commission due to HARDINKAAM
+  franchiseCommissionPayableToHardinkaam?: number; // 15% payable to HARDINKAAM (not franchise income)
+  franchiseCommissionRate?: number; // e.g. 15%
+  isFranchisePayableToHardinkaam?: boolean; // true
+  franchiseRatePercent: number;
+  franchisePartnerId?: string;
+  partnerCommission: number;
+  partnerRatePercent: number;
+  partnerId?: string;
+  servicemanEarning: number;
+  servicemanRatePercent: number;
+  serviceManId?: string;
+  taxDeduction: number;
+  taxRatePercent: number;
+  calculatedAt: string;
+}
+
+export interface CommissionSettings {
+  companyRatePercent: number; // default 15%
+  franchiseRatePercent: number; // default 15% PAYABLE TO HARDINKAAM (not franchise income)
+  partnerRatePercent: number; // default 5%
+  taxRatePercent: number; // default 5% TDS
+  minServicemanRatePercent: number;
+  updatedAt: string;
+  updatedBy: string;
 }
 
 export interface Transaction {
@@ -735,7 +921,7 @@ export interface WhatsAppLog {
 
 export interface Notification {
   id: string;
-  userId: string;
+  userId?: string;
   title: string;
   message: string;
   type: 'booking' | 'payment' | 'system' | 'kyc' | 'agreement';
@@ -743,6 +929,8 @@ export interface Notification {
   read: boolean;
   createdAt: string;
   targetRole?: 'admin' | 'franchise' | 'pro' | 'customer';
+  bookingId?: string;
+  eventType?: string;
   metadata?: Record<string, any>;
 }
 
@@ -762,7 +950,7 @@ export interface AuditLog {
   timestamp: string;
 }
 
-export type FranchiseAreaType = 'village' | 'town' | 'district';
+export type FranchiseAreaType = 'village' | 'town' | 'district' | 'city' | 'state' | string;
 export type FranchiseStatus = 'applied' | 'under_review' | 'approved' | 'active' | 'probation' | 'terminated';
 
 export interface FranchiseRule {
@@ -1056,13 +1244,432 @@ export interface BookingAssignment {
 }
 
 export interface DeviceToken {
+  id?: string;
   token: string;
+  uid: string;
   userId: string;
   role: string;
+  device?: string;
   deviceType?: 'web' | 'android' | 'ios';
+  platform?: 'web' | 'pwa' | 'android' | 'ios';
+  userAgent?: string;
+  isActive?: boolean;
   updatedAt: string;
   createdAt?: string;
+  lastSeenAt?: string;
 }
+
+// =========================================================================
+// CUSTOMER REWARD POINTS & REFERRAL SYSTEM (PHASE 3)
+// =========================================================================
+
+export type RewardType =
+  | 'BOOKING'
+  | 'REFERRAL'
+  | 'PROMOTION'
+  | 'ADMIN_ADJUSTMENT'
+  | 'REDEMPTION'
+  | 'REVERSAL'
+  | 'EXPIRY';
+
+export type RewardTransactionStatus =
+  | 'COMPLETED'
+  | 'ACTIVE'
+  | 'AVAILABLE'
+  | 'RESERVED'
+  | 'REDEEMED'
+  | 'DEDUCTED'
+  | 'RELEASED'
+  | 'REVERSED'
+  | 'EXPIRED'
+  | 'PENDING';
+
+export interface RewardTransaction {
+  id?: string;
+  transactionId: string;
+  redemptionId?: string;
+  customerId: string;
+  bookingId?: string;
+  type: RewardType | string;
+  points: number;
+  amountPoints?: number; // legacy alias
+  pointValue?: number; // rupee value / discount
+  rupeeValue?: number; // legacy alias
+  status: RewardTransactionStatus;
+  referenceId?: string; // legacy alias / reference
+  description?: string;
+  createdAt: string;
+  finalizedAt?: string;
+  updatedAt?: string;
+}
+
+export interface RewardSettings {
+  enabled: boolean;
+  pointsPerRupeeSpent: number; // e.g. 1 point per ₹1
+  pointsToRupeeConversion: number; // e.g. 10 points = ₹1 (or 1000 points = ₹100)
+  minPointsForRedemption: number; // e.g. 100 points
+  maxPointsUsablePerBooking: number; // e.g. 5000 points
+  maxBookingDiscountPercent: number; // e.g. 50%
+  minBookingAmountForRedemption?: number; // e.g. ₹199 minimum booking amount
+  referralRewardPoints: number; // e.g. 500 points
+  qualifyingAction: 'registration' | 'first_booking' | 'first_completed_service';
+  expiryDays: number; // e.g. 365 days
+}
+
+export interface CustomerRewardWallet {
+  customerId: string;
+  pointsBalance: number;
+  availablePoints?: number; // legacy alias
+  reservedPoints?: number;
+  totalEarned: number;
+  totalRedeemed: number;
+  totalReversed: number;
+  totalExpired?: number;
+  estimatedRupeeValue?: number;
+  transactions?: RewardTransaction[];
+  updatedAt: string;
+}
+
+export type ReferralStatus =
+  | 'PENDING'
+  | 'QUALIFIED'
+  | 'REWARDED'
+  | 'REJECTED'
+  | 'CANCELLED';
+
+export interface CustomerReferralRecord {
+  id?: string;
+  referralId: string;
+  referrerCustomerId: string;
+  referredCustomerId: string;
+  status: ReferralStatus;
+  qualifyingBookingId?: string;
+  rewardPoints: number;
+  createdAt: string;
+  updatedAt?: string;
+  rewardTransactionId?: string;
+}
+
+export interface AdminRewardAdjustmentRecord {
+  adjustmentId: string;
+  adminId: string;
+  customerId: string;
+  points: number;
+  reason: string;
+  previousBalance: number;
+  newBalance: number;
+  timestamp: string;
+  createdAt?: string;
+}
+
+export * from './tax';
+export * from './documents';
+
+// ==========================================
+// FEATURE 1: SERVICE GUARANTEE & FREE REVISIT
+// ==========================================
+export type GuaranteeStatus = 'active' | 'claimed' | 'expired' | 'void';
+export type GuaranteeClaimStatus = 'submitted' | 'under_review' | 'approved' | 'rejected' | 'resolved';
+
+export interface ServiceGuarantee {
+  id: string; // guar_{bookingId}
+  bookingId: string;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  serviceId: string;
+  serviceName: string;
+  categoryId: string;
+  categoryName: string;
+  serviceManId: string;
+  serviceManName: string;
+  completionDate: string;
+  startDate: string;
+  expiryDate: string;
+  validityDays: number;
+  terms: string[];
+  exclusions: string[];
+  coveredWork: string[];
+  coveredParts?: string[];
+  status: GuaranteeStatus;
+  claimId?: string;
+  revisitBookingId?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface GuaranteeClaim {
+  id: string;
+  guaranteeId: string;
+  bookingId: string;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  serviceName: string;
+  description: string;
+  photos?: string[];
+  preferredContactTime: string;
+  status: GuaranteeClaimStatus;
+  adminNotes?: string;
+  rejectionReason?: string;
+  revisitBookingId?: string;
+  assignedProId?: string;
+  assignedProName?: string;
+  createdAt: string;
+  reviewedAt?: string;
+  resolvedAt?: string;
+}
+
+export interface GuaranteeSettings {
+  enabled: boolean;
+  defaultValidityDays: number; // e.g. 30 days
+  categoryValidityDays: Record<string, number>; // e.g. ac_repair: 30, plumbing: 15, electrical: 15
+  standardTerms: string[];
+  standardExclusions: string[];
+  coversLabourOnly: boolean;
+}
+
+// ==========================================
+// FEATURE 2: DIGITAL HOME SERVICE PASSPORT
+// ==========================================
+export interface AssetServiceHistoryItem {
+  bookingId: string;
+  serviceName: string;
+  date: string;
+  technicianName: string;
+  workDone: string[];
+  partsReplaced: string[];
+  cost: number;
+  guaranteeExpiry?: string;
+}
+
+export interface HomePassportAsset {
+  id: string;
+  customerId: string;
+  householdName: string;
+  address: string;
+  category: string; // e.g. 'Air Conditioner', 'Refrigerator', 'Washing Machine', 'RO Purifier'
+  name: string; // e.g. 'Master Bedroom Split AC'
+  brand?: string;
+  modelNumber?: string;
+  serialNumber?: string;
+  purchaseDate?: string;
+  invoiceDocUrl?: string;
+  warrantyExpiryDate?: string;
+  serviceHistory: AssetServiceHistoryItem[];
+  lastServiceDate?: string;
+  nextMaintenanceDate?: string;
+  reminderEnabled: boolean;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ==========================================
+// FEATURE 3: FAMILY & PARENTS CARE MODE
+// ==========================================
+export interface FamilyCareMemberAccess {
+  userId?: string;
+  name?: string;
+  emailOrPhone: string;
+  status: 'pending' | 'accepted' | 'revoked';
+  role: 'coordinator' | 'viewer';
+  invitedAt: string;
+  expiresAt: string;
+  acceptedAt?: string;
+}
+
+export interface FamilyHousehold {
+  id: string;
+  ownerId: string;
+  ownerName: string;
+  ownerPhone: string;
+  label: string; // e.g. "माता-पिता का घर (Parents' Home)"
+  address: string;
+  city: string;
+  locality?: string;
+  beneficiaryName: string;
+  beneficiaryPhone: string;
+  careNotes?: string;
+  sharedWith: FamilyCareMemberAccess[];
+  permissions: {
+    canBook: boolean;
+    canViewLiveStatus: boolean;
+    canReceiveSms: boolean;
+    canApproveEstimates: boolean;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ==========================================
+// FEATURE 4: SOCIETY & BUSINESS SERVICES PORTAL
+// ==========================================
+export type BusinessOrgType = 'society_rwa' | 'office' | 'clinic' | 'retail_store' | 'property_management';
+export type WorkOrderPriority = 'low' | 'medium' | 'high' | 'emergency';
+export type WorkOrderStatus = 'created' | 'approved' | 'dispatched' | 'in_progress' | 'completed' | 'billed';
+
+export interface BusinessRegisteredAddress {
+  id: string;
+  label: string;
+  address: string;
+  pincode: string;
+}
+
+export interface BusinessOrgMember {
+  userId: string;
+  name: string;
+  phone: string;
+  role: 'org_admin' | 'facility_manager' | 'viewer';
+  addedAt: string;
+}
+
+export interface BusinessRecurringContract {
+  id: string;
+  title: string;
+  serviceId: string;
+  serviceName: string;
+  frequency: 'monthly' | 'quarterly' | 'bi_annual';
+  nextScheduledDate: string;
+  estimatedAmount: number;
+  status: 'active' | 'paused';
+}
+
+export interface BusinessOrganization {
+  id: string;
+  name: string;
+  type: BusinessOrgType;
+  contactPerson: string;
+  contactPhone: string;
+  contactEmail: string;
+  gstin?: string;
+  billingAddress: string;
+  registeredAddresses: BusinessRegisteredAddress[];
+  members: BusinessOrgMember[];
+  recurringContracts: BusinessRecurringContract[];
+  status: 'verified' | 'pending_verification' | 'suspended';
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface BusinessWorkOrder {
+  id: string;
+  orgId: string;
+  orgName: string;
+  title: string;
+  serviceId: string;
+  serviceName: string;
+  locationId: string;
+  address: string;
+  priority: WorkOrderPriority;
+  preferredDate: string;
+  preferredSlot: string;
+  estimatedBudget: number;
+  status: WorkOrderStatus;
+  bookingId?: string;
+  invoiceId?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+// ==========================================
+// FEATURE 5: SERVICE PRO SKILL ACADEMY
+// ==========================================
+export interface AcademyModule {
+  id: string;
+  title: string;
+  titleEn?: string;
+  contentMarkdown: string;
+  durationMinutes: number;
+  checklist: string[];
+}
+
+export interface AcademyQuizQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  correctIndex: number;
+}
+
+export interface AcademyCourse {
+  id: string;
+  title: string;
+  titleEn?: string;
+  categoryId: string;
+  categoryName?: string;
+  description: string;
+  thumbnailUrl?: string;
+  modules: AcademyModule[];
+  assessment: {
+    passingScore: number; // e.g. 75
+    questions: AcademyQuizQuestion[];
+  };
+  badgeName: string;
+  badgeIcon: string;
+  published: boolean;
+  createdAt: string;
+}
+
+export interface ProLearningProgress {
+  id: string; // prog_{proId}_{courseId}
+  proId: string;
+  proName: string;
+  courseId: string;
+  courseTitle: string;
+  completedModuleIds: string[];
+  assessmentPassed: boolean;
+  assessmentScore?: number;
+  badgeAwarded: boolean;
+  badgeAwardedAt?: string;
+  practicalVerified: boolean;
+  verifiedBy?: string;
+  verifiedAt?: string;
+  updatedAt: string;
+}
+
+// ==========================================
+// FEATURE 6: KAAMDOST HINDI VOICE BOOKING
+// ==========================================
+export interface VoiceBookingEntityDraft {
+  serviceKeyword?: string;
+  matchedServiceId?: string;
+  matchedServiceName?: string;
+  scheduledDate?: string;
+  scheduledTime?: string;
+  householdOrAddress?: string;
+  city?: string;
+  estimatedPrice?: number;
+  notes?: string;
+  confidenceScore?: number;
+}
+
+// ==========================================
+// FEATURE 7: SERVICE PRO LOW-NETWORK MODE
+// ==========================================
+export interface ProOfflineJobRecord {
+  bookingId: string;
+  serviceName: string;
+  categoryName?: string;
+  customerName: string;
+  customerPhone: string;
+  address: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  amount: number;
+  status: BookingStatus;
+  taskChecklist: Array<{ id: string; title: string; completed: boolean }>;
+  draftWorkNotes: string;
+  cachedAt: string;
+  pendingSyncDraft: boolean;
+  syncStatus: 'synced' | 'pending' | 'syncing' | 'failed';
+  lastSyncError?: string;
+}
+
+
+
 
 
 

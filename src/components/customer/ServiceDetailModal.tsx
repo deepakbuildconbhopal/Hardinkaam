@@ -22,16 +22,18 @@ import { LazyImage } from '../common/LazyImage';
 
 interface Props {
   service: Service | null;
-  allServices: Service[];
+  allServices?: Service[];
   onClose: () => void;
-  onBookNow: (service: Service, preferredPro?: ServiceMan) => void;
+  onBookNow?: (service: Service, preferredPro?: ServiceMan) => void;
+  onBookDirect?: (service: Service, preferredPro?: ServiceMan) => void;
 }
 
 export const ServiceDetailModal: React.FC<Props> = ({
   service,
-  allServices,
+  allServices = [],
   onClose,
   onBookNow,
+  onBookDirect,
 }) => {
   const { addItem, getItemQuantity, updateQuantity } = useCart();
   const { isFavouriteService, toggleFavouriteService } = useFavourites();
@@ -376,7 +378,8 @@ export const ServiceDetailModal: React.FC<Props> = ({
           <button
             onClick={() => {
               onClose();
-              onBookNow(service);
+              if (onBookNow) onBookNow(service);
+              else if (onBookDirect) onBookDirect(service);
             }}
             className="flex-1 max-w-xs px-6 py-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-black text-xs sm:text-sm shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-1.5"
           >

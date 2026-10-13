@@ -1,5 +1,6 @@
-import { doc, updateDoc, collection, query, where, getDocs, addDoc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, updateDoc, collection, query, where, getDocs, addDoc, getDoc, setDoc, limit } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../utils/sparkQuotaGuard';
 import {
   Booking,
   ServiceMan,
@@ -8,6 +9,7 @@ import {
   TrackingLocationPoint,
   LiveLocationTrackingStatus,
 } from '../types';
+import { notifyReassignment } from './bookingNotificationIntegrationService';
 
 export const UNABLE_TO_REACH_REASONS = [
   { id: 'emergency', label: 'Emergency (आपातकालीन स्थिति)' },
@@ -460,9 +462,10 @@ export async function findEligibleReplacementTech(
   categoryId?: string,
   excludeTechId?: string
 ): Promise<ServiceMan[]> {
+  if (isResourceExhausted()) return [];
   try {
     const prosRef = collection(db, 'service_men');
-    const snap = await getDocs(prosRef);
+    const snap = await getDocs(query(prosRef, limit(50)));
     const targetDist = districtId.toLowerCase().trim();
 
     const matches: ServiceMan[] = [];
@@ -488,6 +491,7 @@ export async function findEligibleReplacementTech(
     return matches;
   } catch (err) {
     console.warn('Find replacement tech error:', err);
+    checkAndHandleQuotaError(err);
     return [];
   }
 }
@@ -544,6 +548,15 @@ export async function reassignBookingToTech(
       details: `Booking #${booking.id} reassigned to ${newTech.name} (${newTech.phone}) by ${reassignedBy}.`,
       timestamp: nowIso,
     });
+
+    // Dispatch deduplicated reassignment notifications
+    notifyReassignment(
+      booking,
+      reason,
+      newTech.id,
+      newTech.name,
+      historyEntry.previousServiceManId
+    ).catch(() => {});
 
     return { success: true, message: `Booking successfully reassigned to ${newTech.name}` };
   } catch (err: any) {

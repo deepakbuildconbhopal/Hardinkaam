@@ -28,8 +28,13 @@ import {
   Check,
   Filter,
   Navigation,
+  QrCode,
+  Banknote,
+  Database,
 } from 'lucide-react';
+import { CashPaymentModal } from '../common/CashPaymentModal';
 import { useAuth } from '../../context/AuthContext';
+import { useOfflineBookingSync } from '../../hooks/useOfflineBookingSync';
 import { Booking, BookingStatus } from '../../types';
 import { generateWhatsAppVideoCallUrl } from '../../utils/whatsappVideoCall';
 import {
@@ -52,16 +57,22 @@ import {
 } from '../../utils/bookingDateUtils';
 import { ChatModal } from './ChatModal';
 import { ReviewSubmitForm } from './ReviewComponent';
+import { PostServiceFeedbackModal } from './PostServiceFeedbackModal';
 import { BookingModal } from './BookingModal';
 import { DeliveryOtpPrompt } from './DeliveryOtpPrompt';
 import { RescheduleModal } from './RescheduleModal';
+import { ServiceGuaranteeModal } from './ServiceGuaranteeModal';
 import { ServiceEtaWidget, getStandardDurationMinutes, getServiceStartTime, formatTimeAmPm } from './ServiceEtaWidget';
 import { QuickRebookModal, getPreviousProForBooking, getServiceForBooking } from './QuickRebookModal';
 import { LiveServiceTrackerModal } from './LiveServiceTrackerModal';
+import { CustomerBookingQrModal } from './CustomerBookingQrModal';
 import { CustomerBookingLiveMapCard } from './CustomerBookingLiveMapCard';
 import { WorkServiceTimer } from '../common/WorkServiceTimer';
 import { AdSenseBanner } from '../ads/AdSenseBanner';
 import { Service, ServiceMan } from '../../types';
+import { FinancialDocumentModal } from '../common/FinancialDocumentModal';
+import { createOrGetTaxInvoiceForBooking } from '../../services/documentAndRefundService';
+import { FinancialDocument } from '../../types/documents';
 
 interface Props {
   bookings: Booking[];
@@ -84,6 +95,7 @@ export const MyBookings: React.FC<Props> = ({
   onRefresh,
 }) => {
   const { currentUser, userProfile } = useAuth();
+  const { isOnline, pendingQueue, isSyncing, syncNow, deletePending } = useOfflineBookingSync();
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -97,11 +109,15 @@ export const MyBookings: React.FC<Props> = ({
   const [reviewBooking, setReviewBooking] = useState<Booking | null>(null);
   const [lifecycleBooking, setLifecycleBooking] = useState<Booking | null>(null);
   const [invoiceBooking, setInvoiceBooking] = useState<Booking | null>(null);
+  const [activeFinancialDoc, setActiveFinancialDoc] = useState<FinancialDocument | null>(null);
   const [cancelBookingItem, setCancelBookingItem] = useState<Booking | null>(null);
   const [cancelReason, setCancelReason] = useState<string>('Plans changed');
   const [rescheduleBooking, setRescheduleBooking] = useState<Booking | null>(null);
   const [quickRebookBooking, setQuickRebookBooking] = useState<Booking | null>(null);
   const [trackingBooking, setTrackingBooking] = useState<Booking | null>(null);
+  const [qrModalBooking, setQrModalBooking] = useState<Booking | null>(null);
+  const [cashPaymentBooking, setCashPaymentBooking] = useState<Booking | null>(null);
+  const [guaranteeBooking, setGuaranteeBooking] = useState<Booking | null>(null);
 
   const handleInitiateQuickRebook = (booking: Booking) => {
     setQuickRebookBooking(booking);
@@ -1046,8 +1062,101 @@ export const MyBookings: React.FC<Props> = ({
           </div>
         </div>
       )}
+      {/* Offline Pending Synchronization Queue Section */}
+      {pendingQueue.length > 0 && (
+        <div className="bg-amber-50/90 border border-amber-300 rounded-3xl p-4 sm:p-5 shadow-sm space-y-3 animate-in fade-in">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500 text-stone-950 flex items-center justify-center font-bold shadow-xs">
+                <Database className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-200 text-amber-900">
+                    लंबित सिंक कतार (Pending Synchronization)
+                  </span>
+                  <span className="text-xs text-amber-950 font-bold">
+                    {pendingQueue.length} ऑफ़लाइन {pendingQueue.length === 1 ? 'बुकिंग' : 'बुकिंग्स'}
+                  </span>
+                </div>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  ये बुकिंग्स आपके डिवाइस के IndexedDB में सुरक्षित हैं। इंटरनेट सक्रिय होते ही स्वतः Firestore पर सिंक हो जाएंगी।
+                </p>
+              </div>
+            </div>
 
-      {filteredBookings.length === 0 ? (
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={syncNow}
+                disabled={isSyncing || !isOnline}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>
+                  {isSyncing ? 'सिंक हो रहा है...' : isOnline ? 'अभी सिंक करें (Push to Firestore)' : 'ऑफ़लाइन (इंटरनेट की प्रतीक्षा)'}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Cards for each offline booking in the queue */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+            {pendingQueue.map((item) => (
+              <div
+                key={item.id}
+                className="bg-white rounded-2xl border border-amber-200 p-3.5 shadow-xs flex flex-col justify-between gap-2.5"
+              >
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-extrabold text-stone-900 text-xs sm:text-sm truncate">
+                      {item.booking.serviceName}
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 whitespace-nowrap">
+                      #{item.id}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3 text-[11px] text-stone-500 mt-1">
+                    <span className="flex items-center gap-1">
+                      <Calendar className="w-3 h-3 text-stone-400" />
+                      {item.booking.scheduledDate} {item.booking.scheduledTime && `(${item.booking.scheduledTime})`}
+                    </span>
+                    <span className="font-bold text-stone-800">
+                      ₹{item.booking.amount || item.booking.totalAmount || 0}
+                    </span>
+                    <span className="text-stone-400">
+                      {item.booking.paymentMethod === 'cash' ? 'Pay Cash on Service' : item.booking.paymentMethod}
+                    </span>
+                  </div>
+                  {item.booking.address && (
+                    <p className="text-[11px] text-stone-500 truncate mt-1">
+                      {item.booking.address}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-stone-100 text-[11px]">
+                  <span className="text-stone-400 text-[10px]">
+                    सहेजा गया: {new Date(item.timestamp).toLocaleTimeString()}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => deletePending(item.id)}
+                      className="text-stone-400 hover:text-rose-600 transition"
+                      title="हटाएं"
+                    >
+                      रद्द करें
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {filteredBookings.length === 0 && pendingQueue.length === 0 ? (
         <div className="bg-white rounded-3xl border border-stone-200 p-10 sm:p-14 text-center max-w-md mx-auto shadow-xs">
           {searchQuery ? (
             <>
@@ -1382,7 +1491,7 @@ export const MyBookings: React.FC<Props> = ({
                             </button>
                             <a
                               href={generateWhatsAppVideoCallUrl({
-                                phone: booking.serviceManPhone || '+919826012345',
+                                phone: booking.serviceManPhone || '+916267546945',
                                 recipientName: booking.serviceManName || 'Service Pro',
                                 roomCode: 'DBC-' + booking.id.slice(-6).toUpperCase(),
                                 meetingUrl: `${window.location.origin}/#call-DBC-${booking.id.slice(-6).toUpperCase()}`,
@@ -1530,6 +1639,20 @@ export const MyBookings: React.FC<Props> = ({
                       </div>
 
                       <div className="flex items-center gap-2">
+                        {/* Booking QR Code Button */}
+                        {['accepted', 'assigned', 'on_the_way', 'arriving', 'arrived', 'otp_pending', 'in_progress', 'work_started'].includes(booking.status) && (
+                          <button
+                            id={`btn-show-qr-${booking.id}`}
+                            type="button"
+                            onClick={() => setQrModalBooking(booking)}
+                            className="px-3 py-1.5 rounded-xl border border-stone-300 bg-white hover:bg-stone-100 text-stone-800 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                            title="Show booking QR code for technician to scan"
+                          >
+                            <QrCode className="w-3.5 h-3.5 text-orange-600" />
+                            <span>Booking QR</span>
+                          </button>
+                        )}
+
                         {/* Live Service Tracking Button */}
                         {['accepted', 'on_the_way', 'arriving', 'arrived', 'otp_pending', 'in_progress', 'work_started'].includes(booking.status) && (
                           <button
@@ -1587,6 +1710,35 @@ export const MyBookings: React.FC<Props> = ({
                           </span>
                         )}
 
+                        {/* GST Tax Invoice Button */}
+                        {isFinished && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const doc = await createOrGetTaxInvoiceForBooking(booking);
+                              setActiveFinancialDoc(doc);
+                            }}
+                            className="px-3.5 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                            title="Download official GST Tax Invoice"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-emerald-200" />
+                            <span>GST Tax Invoice</span>
+                          </button>
+                        )}
+
+                        {/* Service Guarantee & Free Revisit Button */}
+                        {isFinished && (
+                          <button
+                            type="button"
+                            onClick={() => setGuaranteeBooking(booking)}
+                            className="px-3.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+                            title="सर्विस गारंटी प्रमाणपत्र एवं मुफ़्त रिविजिट दावा"
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>सर्विस गारंटी (Guarantee)</span>
+                          </button>
+                        )}
+
                         {/* HARDINKAAM Service Bill Button */}
                         {isFinished && (
                           <button
@@ -1598,6 +1750,25 @@ export const MyBookings: React.FC<Props> = ({
                             <Receipt className="w-3.5 h-3.5 text-amber-400" />
                             <span>HARDINKAAM Bill</span>
                           </button>
+                        )}
+
+                        {/* Cash Payment Action for Completed Unpaid Bookings */}
+                        {isFinished && booking.paymentStatus !== 'paid' && (
+                          booking.cashPaymentStatus === 'pending_approval' ? (
+                            <span className="px-3 py-1.5 rounded-xl bg-amber-50 text-amber-800 border border-amber-300 text-xs font-bold flex items-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5 text-amber-600 animate-spin" /> नकद सत्यापन लंबित
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setCashPaymentBooking(booking)}
+                              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                              title="नकद भुगतान अनुरोध भेजें"
+                            >
+                              <Banknote className="w-3.5 h-3.5" />
+                              <span>Pay Cash (नकद भुगतान)</span>
+                            </button>
+                          )
                         )}
 
                         {/* Quick Rebook Button for Completed bookings */}
@@ -1659,17 +1830,14 @@ export const MyBookings: React.FC<Props> = ({
         />
       )}
 
-      {/* Review Modal using ReviewComponent's ReviewSubmitForm */}
+      {/* Post-Service Feedback & Rating Modal */}
       {reviewBooking && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
-          <div className="max-w-md w-full">
-            <ReviewSubmitForm
-              booking={reviewBooking}
-              onCancel={() => setReviewBooking(null)}
-              onReviewSubmitted={() => setReviewBooking(null)}
-            />
-          </div>
-        </div>
+        <PostServiceFeedbackModal
+          isOpen={Boolean(reviewBooking)}
+          booking={reviewBooking}
+          onClose={() => setReviewBooking(null)}
+          onSubmitted={() => setReviewBooking(null)}
+        />
       )}
 
       {/* Cancel Dialog Modal */}
@@ -1783,7 +1951,7 @@ export const MyBookings: React.FC<Props> = ({
 
               <div className="p-3 bg-stone-50 rounded-xl text-[11px] text-stone-600 text-center mt-4 space-y-1">
                 <p className="font-semibold text-stone-800">
-                  Thank you for choosing HARDINKAAM. For queries call +91 98260 12345.
+                  Thank you for choosing HARDINKAAM. For queries call +91 62675 46945.
                 </p>
                 <p className="text-[10px] text-stone-500">
                   Office: S-2, Ashirwad Complex, Zone-1, M.P. Nagar, Bhopal, MP - 462011
@@ -1811,6 +1979,14 @@ export const MyBookings: React.FC<Props> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Official GST Financial Document Modal */}
+      {activeFinancialDoc && (
+        <FinancialDocumentModal
+          document={activeFinancialDoc}
+          onClose={() => setActiveFinancialDoc(null)}
+        />
       )}
 
       {/* Download Booking History Modal */}
@@ -2222,6 +2398,39 @@ export const MyBookings: React.FC<Props> = ({
           onOpenChat={(b) => {
             setTrackingBooking(null);
             setActiveChatBooking(b);
+          }}
+        />
+      )}
+
+      {/* Customer Booking QR Modal */}
+      {qrModalBooking && (
+        <CustomerBookingQrModal
+          isOpen={Boolean(qrModalBooking)}
+          onClose={() => setQrModalBooking(null)}
+          booking={qrModalBooking}
+          arrivalOtp={qrModalBooking.arrivalOtp || qrModalBooking.otp}
+        />
+      )}
+
+      {/* Cash Payment Request Modal */}
+      <CashPaymentModal
+        booking={cashPaymentBooking}
+        isOpen={Boolean(cashPaymentBooking)}
+        onClose={() => setCashPaymentBooking(null)}
+        callerRole="CUSTOMER"
+        onSuccess={() => {
+          if (onRefresh) onRefresh();
+        }}
+      />
+
+      {/* Service Guarantee Modal */}
+      {guaranteeBooking && (
+        <ServiceGuaranteeModal
+          isOpen={Boolean(guaranteeBooking)}
+          onClose={() => setGuaranteeBooking(null)}
+          booking={guaranteeBooking}
+          onClaimSubmitted={() => {
+            if (onRefresh) onRefresh();
           }}
         />
       )}

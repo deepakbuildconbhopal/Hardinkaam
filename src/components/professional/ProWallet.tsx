@@ -15,16 +15,19 @@ import {
   Check,
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, doc, setDoc } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { db, auth } from '../../firebase/config';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { Booking } from '../../types';
+import { Booking, LedgerEntry } from '../../types';
+import { getLedgerEntriesForUser } from '../../services/commissionLedgerService';
+import { AdSenseBanner } from '../ads/AdSenseBanner';
 
 export const ProWallet: React.FC = () => {
-  const { userProfile, updateUserProfileData } = useAuth();
+  const { currentUser, userProfile, updateUserProfileData } = useAuth();
   const { addToast } = useToast();
 
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [ledgers, setLedgers] = useState<LedgerEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Bank & UPI Settlement settings
@@ -35,20 +38,27 @@ export const ProWallet: React.FC = () => {
   const [isSavingDetails, setIsSavingDetails] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
-  // Fetch technician bookings
+  // Fetch technician bookings & official ledgers
   useEffect(() => {
-    const proId = userProfile?.id || 'pro_rajesh_electrician';
-    const proName = userProfile?.name || 'Rajesh Sharma';
+    if (!auth.currentUser || !currentUser?.uid) {
+      setLoading(false);
+      return;
+    }
+    const proId = currentUser.uid;
+    const proName = userProfile?.name || 'Technician';
+
+    const q = query(
+      collection(db, 'bookings'),
+      where('serviceManId', '==', proId)
+    );
 
     const unsub = onSnapshot(
-      collection(db, 'bookings'),
+      q,
       (snap) => {
         const list: Booking[] = [];
         snap.forEach((d) => {
           const data = d.data() as Booking;
-          if (data.serviceManId === proId || data.serviceManName === proName || !data.serviceManId) {
-            list.push({ id: d.id, ...data });
-          }
+          list.push({ id: d.id, ...data });
         });
         setBookings(list);
         setLoading(false);
@@ -58,6 +68,11 @@ export const ProWallet: React.FC = () => {
         setLoading(false);
       }
     );
+
+    // Fetch official ledger records
+    getLedgerEntriesForUser(proId, 'service_man')
+      .then((entries) => setLedgers(entries))
+      .catch((e) => console.warn('Ledgers fetch note:', e));
 
     return () => unsub();
   }, [userProfile?.id, userProfile?.name]);
@@ -318,7 +333,58 @@ export const ProWallet: React.FC = () => {
             })}
           </div>
         )}
+
+        {/* Official HARDINKAAM Accounting Ledgers */}
+        {ledgers.length > 0 && (
+          <div className="mt-6 pt-5 border-t border-stone-200">
+            <h3 className="text-xs font-bold text-stone-700 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+              <span>आधिकारिक कमीशन लेजर प्रविष्टियां / Official Commission Ledgers ({ledgers.length})</span>
+            </h3>
+            <div className="space-y-2">
+              {ledgers.map((l) => (
+                <div
+                  key={l.id}
+                  className="p-3 rounded-xl bg-stone-50 border border-stone-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-stone-900">
+                        #{l.bookingId} — {l.ruleReference || 'Service Earning'}
+                      </span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                        {l.status.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-stone-500 mt-0.5">
+                      Customer Payment via Admin Razorpay • Gross: ₹{l.grossBookingAmount} ({l.ratePercent}%)
+                    </div>
+                    <div className="text-[10px] text-stone-400 font-mono mt-0.5">
+                      Ref: {l.referenceId}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-black text-emerald-700">
+                      +₹{l.amount}
+                    </div>
+                    <span className="text-[10px] text-stone-400">
+                      {new Date(l.createdAt).toLocaleDateString()}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Google AdSense Wallet Banner */}
+      <AdSenseBanner
+        slot="5918273640"
+        format="leaderboard"
+        category="general"
+        label="गूगल एडसेंस • PRO WALLET SPONSOR"
+      />
     </div>
   );
 };

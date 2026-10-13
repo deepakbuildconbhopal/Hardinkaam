@@ -32,24 +32,27 @@ export const FavouritesProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   }, [favouriteServiceIds]);
 
-  const toggleFavouriteService = (serviceId: string) => {
+  const toggleFavouriteService = React.useCallback((serviceId: string) => {
     setFavouriteServiceIds((prev) =>
       prev.includes(serviceId) ? prev.filter((id) => id !== serviceId) : [...prev, serviceId]
     );
-  };
+  }, []);
 
-  const isFavouriteService = (serviceId: string) => {
+  const isFavouriteService = React.useCallback((serviceId: string) => {
     return favouriteServiceIds.includes(serviceId);
-  };
+  }, [favouriteServiceIds]);
+
+  const contextValue = React.useMemo<FavouritesContextType>(
+    () => ({
+      favouriteServiceIds,
+      toggleFavouriteService,
+      isFavouriteService,
+    }),
+    [favouriteServiceIds, toggleFavouriteService, isFavouriteService]
+  );
 
   return (
-    <FavouritesContext.Provider
-      value={{
-        favouriteServiceIds,
-        toggleFavouriteService,
-        isFavouriteService,
-      }}
-    >
+    <FavouritesContext.Provider value={contextValue}>
       {children}
     </FavouritesContext.Provider>
   );

@@ -9,9 +9,19 @@ interface Props {
 }
 
 export const BottomNav: React.FC<Props> = ({ currentTab, onSelectTab, unreadCount = 0 }) => {
-  const { activeRole } = useAuth();
+  const { activeRole, isAdmin, currentUser, userProfile } = useAuth();
+  const isLoggedIn = Boolean(currentUser || userProfile);
 
   const getTabs = () => {
+    if (activeRole === 'admin' && isAdmin) {
+      return [
+        { id: 'admin_dashboard', label: 'Admin Hub', icon: Home },
+        { id: 'admin_users', label: 'Users', icon: Users },
+        { id: 'admin_catalog', label: 'Services', icon: LayoutGrid },
+        { id: 'admin_bookings', label: 'Bookings', icon: Calendar },
+        { id: 'admin_settings', label: 'Settings', icon: Settings },
+      ];
+    }
     switch (activeRole) {
       case 'service_man':
         return [
@@ -29,18 +39,12 @@ export const BottomNav: React.FC<Props> = ({ currentTab, onSelectTab, unreadCoun
           { id: 'partner_wallet', label: 'Wallet', icon: Wallet },
           { id: 'profile', label: 'Account', icon: User },
         ];
-      case 'admin':
-        return [
-          { id: 'admin_dashboard', label: 'Admin Hub', icon: Home },
-          { id: 'admin_users', label: 'Users', icon: Users },
-          { id: 'admin_catalog', label: 'Services', icon: LayoutGrid },
-          { id: 'admin_bookings', label: 'Bookings', icon: Calendar },
-          { id: 'admin_settings', label: 'Settings', icon: Settings },
-        ];
       default: // Customer
         return [
-          { id: 'home', label: 'Services', icon: Home },
-          { id: 'categories', label: 'Categories', icon: LayoutGrid },
+          isLoggedIn
+            ? { id: 'customer_dashboard', label: 'Dashboard', icon: Home }
+            : { id: 'landing', label: 'Intro', icon: Home },
+          { id: 'home', label: 'Services', icon: LayoutGrid },
           { id: 'bookings', label: 'Bookings', icon: Calendar },
           { id: 'wallet', label: 'Wallet', icon: Wallet },
           { id: 'profile', label: 'Profile', icon: User },
@@ -53,7 +57,7 @@ export const BottomNav: React.FC<Props> = ({ currentTab, onSelectTab, unreadCoun
   return (
     <nav
       id="mobile-bottom-navigation"
-      className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-stone-200 py-1.5 px-2 shadow-lg"
+      className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-stone-200 py-1.5 px-2 shadow-lg pb-[calc(env(safe-area-inset-bottom,0px)+6px)]"
     >
       <div className="flex items-center justify-around">
         {tabs.map((tab) => {

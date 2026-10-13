@@ -27,6 +27,7 @@ import {
   FileText,
   Clock,
   Ban,
+  Palette,
 } from 'lucide-react';
 import { Booking, Service, ServiceMan, FranchisePartner, FranchiseAgreementRecord } from '../../types';
 import { ALL_INDIA_LOCATIONS } from '../../data/indiaLocations';
@@ -42,15 +43,18 @@ import { AdminFranchiseKYCSettingsModal } from './AdminFranchiseKYCSettingsModal
 import { AdminFranchiseKYCVerification } from './AdminFranchiseKYCVerification';
 import { AdminAgreementHistory } from './AdminAgreementHistory';
 import { AdminRealtimeNotificationCenter } from './AdminRealtimeNotificationCenter';
+import { AdminUniversalSearchModal } from './AdminUniversalSearchModal';
 import { logAuditEvent } from '../../services/auditService';
 import { auth, db } from '../../firebase/config';
-import { collection, onSnapshot, doc, updateDoc, setDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, updateDoc, setDoc, query, limit } from 'firebase/firestore';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../../utils/sparkQuotaGuard';
 
 interface Props {
-  bookings: Booking[];
-  services: Service[];
-  serviceMen: ServiceMan[];
-  onNavigateTab: (tab: string) => void;
+  bookings?: Booking[];
+  services?: Service[];
+  serviceMen?: ServiceMan[];
+  onNavigateTab?: (tab: string) => void;
+  onSelectTab?: (tab: string) => void;
 }
 
 export const AdminSuperDashboard: React.FC<Props> = ({
@@ -58,7 +62,12 @@ export const AdminSuperDashboard: React.FC<Props> = ({
   services = [],
   serviceMen = [],
   onNavigateTab,
+  onSelectTab,
 }) => {
+  const handleNav = (tab: string) => {
+    if (onSelectTab) onSelectTab(tab);
+    else if (onNavigateTab) onNavigateTab(tab);
+  };
   const [activeSubView, setActiveSubView] = useState<'overview' | 'kyc_verification' | 'agreement_history'>('overview');
   const [partners, setPartners] = useState<FranchisePartner[]>([]);
   const [agreements, setAgreements] = useState<FranchiseAgreementRecord[]>([]);
@@ -73,6 +82,7 @@ export const AdminSuperDashboard: React.FC<Props> = ({
   const [isZipModalOpen, setIsZipModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isKycSettingsModalOpen, setIsKycSettingsModalOpen] = useState(false);
+  const [isUniversalSearchOpen, setIsUniversalSearchOpen] = useState(false);
   const [targetDistrictForSettings, setTargetDistrictForSettings] = useState({ id: 'bhopal', name: 'Bhopal', state: 'Madhya Pradesh' });
   const [targetDistrictForZip, setTargetDistrictForZip] = useState({ id: 'gwalior', name: 'Gwalior' });
   const [preselectedDistrictForActivation, setPreselectedDistrictForActivation] = useState({
@@ -80,22 +90,31 @@ export const AdminSuperDashboard: React.FC<Props> = ({
     state: 'Madhya Pradesh',
   });
 
-  // Real-time Partners & Cities subscription
+  // Real-time Partners & Cities subscription (bounded & quota-guarded)
   useEffect(() => {
+    if (isResourceExhausted()) return;
+
     const unsubPartners = subscribeAllFranchisePartners((list) => {
       setPartners(list);
     });
 
-    // Subscribe to franchise_cities
-    const unsubCities = onSnapshot(collection(db, 'franchise_cities'), (snap) => {
-      const map: Record<string, any> = {};
-      snap.forEach((d) => {
-        map[d.id.toLowerCase()] = d.data();
-      });
-      setCityRecords(map);
-    });
+    // Subscribe to franchise_cities (bounded)
+    const unsubCities = onSnapshot(
+      query(collection(db, 'franchise_cities'), limit(50)),
+      (snap) => {
+        const map: Record<string, any> = {};
+        snap.forEach((d) => {
+          map[d.id.toLowerCase()] = d.data();
+        });
+        setCityRecords(map);
+      },
+      (err) => {
+        console.warn('Franchise cities listener notice:', err.message);
+        checkAndHandleQuotaError(err);
+      }
+    );
 
-    // Subscribe to franchise_agreements
+    // Subscribe to franchise_agreements (bounded)
     const unsubAgreements = subscribeAllFranchiseAgreements((list) => {
       setAgreements(list);
     });
@@ -374,6 +393,22 @@ export const AdminSuperDashboard: React.FC<Props> = ({
             >
               <Plus className="w-4 h-4" />
               <span>+ नया जिला सक्रिय करें</span>
+            </button>
+
+            <button
+              onClick={() => onNavigateTab('admin_page_builder')}
+              className="px-4 py-3 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-black text-xs flex items-center gap-2 shadow-lg transition-all cursor-pointer border border-purple-400"
+            >
+              <Palette className="w-4 h-4 text-purple-200 animate-pulse" />
+              <span>🎨 पेज कस्टमाइज़र</span>
+            </button>
+
+            <button
+              onClick={() => onNavigateTab('admin_marketing_agent')}
+              className="px-4 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-2 shadow-lg transition-all cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4 text-amber-300" />
+              <span>AI मार्केटिंग &amp; Maps लीड्स</span>
             </button>
 
             <button
@@ -727,11 +762,29 @@ export const AdminSuperDashboard: React.FC<Props> = ({
       {/* Super Admin Management Shortcuts */}
       <div className="bg-white rounded-3xl p-6 border border-stone-200 shadow-sm">
         <h3 className="text-xs font-bold text-stone-500 uppercase tracking-wider mb-4">
-          सुपर एडमिन प्रबंधन केंद्र (Master Management Hub)
+          सुपर एडमिन संपूर्ण नियंत्रण केंद्र (Master Super Admin Control Hub)
         </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 lg:grid-cols-11 gap-3">
           <button
-            onClick={() => onNavigateTab('franchise_reports')}
+            onClick={() => setIsUniversalSearchOpen(true)}
+            className="p-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white flex flex-col items-center text-center gap-2 transition-all cursor-pointer group shadow-md shadow-emerald-950/30 ring-2 ring-emerald-400/40"
+            title="डेटाबेस मास्टर सर्च बार - किसी भी ग्राहक, सर्विसमैन या बुकिंग का पूरा विवरण खोजें"
+          >
+            <Search className="w-5 h-5 text-emerald-200 group-hover:scale-110 transition-transform animate-pulse" />
+            <span className="text-xs font-black text-white">मास्टर सर्च</span>
+          </button>
+
+          <button
+            onClick={() => handleNav('admin_financial_profit')}
+            className="p-3 rounded-2xl bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-300 border border-emerald-200 flex flex-col items-center text-center gap-2 transition-all cursor-pointer group"
+            title="₹121 रजिस्ट्रेशन, कंपनी ग्रॉस/नेट मार्जिन, कमीशन पूल कैपिंग और ऑडिट लेज़र"
+          >
+            <DollarSign className="w-5 h-5 text-emerald-600 group-hover:scale-110 transition-transform animate-pulse" />
+            <span className="text-xs font-black text-emerald-900">वित्तीय लाभ & लेज़र</span>
+          </button>
+
+          <button
+            onClick={() => handleNav('admin_franchise')}
             className="p-3 rounded-2xl bg-stone-50 hover:bg-orange-50 hover:border-orange-200 border border-stone-200 flex flex-col items-center text-center gap-2 transition-all cursor-pointer group"
           >
             <Building2 className="w-5 h-5 text-orange-600 group-hover:scale-110 transition-transform" />
@@ -747,7 +800,7 @@ export const AdminSuperDashboard: React.FC<Props> = ({
           </button>
 
           <button
-            onClick={() => onNavigateTab('reports_manager')}
+            onClick={() => handleNav('admin_reports_manager')}
             className="p-3 rounded-2xl bg-stone-50 hover:bg-orange-50 hover:border-orange-200 border border-stone-200 flex flex-col items-center text-center gap-2 transition-all cursor-pointer group"
           >
             <FileSpreadsheet className="w-5 h-5 text-emerald-600 group-hover:scale-110 transition-transform" />
@@ -755,31 +808,23 @@ export const AdminSuperDashboard: React.FC<Props> = ({
           </button>
 
           <button
-            onClick={() => onNavigateTab('bookings')}
+            onClick={() => handleNav('admin_bookings')}
             className="p-3 rounded-2xl bg-stone-50 hover:bg-orange-50 hover:border-orange-200 border border-stone-200 flex flex-col items-center text-center gap-2 transition-all cursor-pointer group"
           >
             <TrendingUp className="w-5 h-5 text-blue-600 group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-bold text-stone-800">बुकिंग्स</span>
+            <span className="text-xs font-bold text-stone-800">बुकिंग्स & डिस्पैच</span>
           </button>
 
           <button
-            onClick={() => onNavigateTab('users')}
+            onClick={() => handleNav('admin_users')}
             className="p-3 rounded-2xl bg-stone-50 hover:bg-orange-50 hover:border-orange-200 border border-stone-200 flex flex-col items-center text-center gap-2 transition-all cursor-pointer group"
           >
             <Users className="w-5 h-5 text-indigo-600 group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-bold text-stone-800">ग्राहक व यूज़र्स</span>
+            <span className="text-xs font-bold text-stone-800">यूज़र्स & रोल्स</span>
           </button>
 
           <button
-            onClick={() => onNavigateTab('servicemen')}
-            className="p-3 rounded-2xl bg-stone-50 hover:bg-orange-50 hover:border-orange-200 border border-stone-200 flex flex-col items-center text-center gap-2 transition-all cursor-pointer group"
-          >
-            <Briefcase className="w-5 h-5 text-teal-600 group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-bold text-stone-800">सर्विसमैन</span>
-          </button>
-
-          <button
-            onClick={() => onNavigateTab('services')}
+            onClick={() => handleNav('admin_catalog')}
             className="p-3 rounded-2xl bg-stone-50 hover:bg-orange-50 hover:border-orange-200 border border-stone-200 flex flex-col items-center text-center gap-2 transition-all cursor-pointer group"
           >
             <Sliders className="w-5 h-5 text-purple-600 group-hover:scale-110 transition-transform" />
@@ -787,8 +832,24 @@ export const AdminSuperDashboard: React.FC<Props> = ({
           </button>
 
           <button
-            onClick={() => onNavigateTab('audit_logs')}
+            onClick={() => handleNav('admin_settings')}
+            className="p-3 rounded-2xl bg-stone-50 hover:bg-amber-50 hover:border-amber-200 border border-stone-200 flex flex-col items-center text-center gap-2 transition-all cursor-pointer group"
+          >
+            <Settings className="w-5 h-5 text-amber-600 group-hover:scale-110 transition-transform" />
+            <span className="text-xs font-bold text-stone-800">सिस्टम व AdMob</span>
+          </button>
+
+          <button
+            onClick={() => handleNav('admin_marketing_agent')}
             className="p-3 rounded-2xl bg-stone-50 hover:bg-orange-50 hover:border-orange-200 border border-stone-200 flex flex-col items-center text-center gap-2 transition-all cursor-pointer group"
+          >
+            <Sparkles className="w-5 h-5 text-orange-600 group-hover:scale-110 transition-transform" />
+            <span className="text-xs font-bold text-stone-800">AI मार्केटिंग</span>
+          </button>
+
+          <button
+            onClick={() => handleNav('admin_audit_logs')}
+            className="p-3 rounded-2xl bg-stone-50 hover:bg-rose-50 hover:border-rose-200 border border-stone-200 flex flex-col items-center text-center gap-2 transition-all cursor-pointer group"
           >
             <ShieldCheck className="w-5 h-5 text-rose-600 group-hover:scale-110 transition-transform" />
             <span className="text-xs font-bold text-stone-800">ऑडिट लॉग्स</span>
@@ -1019,6 +1080,12 @@ export const AdminSuperDashboard: React.FC<Props> = ({
         isOpen={isKycSettingsModalOpen}
         onClose={() => setIsKycSettingsModalOpen(false)}
         adminName="Super Admin DEEPAK"
+      />
+
+      <AdminUniversalSearchModal
+        isOpen={isUniversalSearchOpen}
+        onClose={() => setIsUniversalSearchOpen(false)}
+        onSelectTab={handleNav}
       />
         </>
       )}

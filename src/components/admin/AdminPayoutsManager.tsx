@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   DollarSign,
   ArrowUpRight,
@@ -31,12 +31,16 @@ import {
   Info,
   Layers,
   TrendingUp,
+  Gift,
 } from 'lucide-react';
-import { doc, updateDoc, collection, addDoc } from 'firebase/firestore';
+import { doc, updateDoc, collection, addDoc, getDocs, query, limit } from 'firebase/firestore';
 import { db, auth } from '../../firebase/config';
-import { Booking, ServiceMan, ServicemanPayoutRecord } from '../../types';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../../utils/sparkQuotaGuard';
+import { Booking, ServiceMan, ServicemanPayoutRecord, LedgerEntry } from '../../types';
+import { getAllPlatformLedgers, triggerPaymentRefund } from '../../services/commissionLedgerService';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
+import { safeFetchJson } from '../../utils/safeJson';
 
 interface Props {
   bookings: Booking[];
@@ -49,11 +53,242 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
   const { addToast } = useToast();
 
   // Navigation & Filtering Tabs
-  const [activeTab, setActiveTab] = useState<'pending' | 'settled' | 'pros' | 'all'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'settled' | 'pros' | 'referrals' | 'all' | 'ledgers'>('pending');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedProFilter, setSelectedProFilter] = useState<string>('all');
   const [commissionRate, setCommissionRate] = useState<number>(15); // 15% platform fee
   const [taxRate, setTaxRate] = useState<number>(5); // 5% TDS / GST deduction
+
+  // Customer Referral Payouts State (Lazy loaded only when referrals tab is viewed)
+  const [referralPayoutRecords, setReferralPayoutRecords] = useState<any[]>([]);
+  const hasLoadedReferralsRef = React.useRef(false);
+
+  const loadReferralPayouts = async () => {
+    if (isResourceExhausted()) return;
+    try {
+      const snap = await getDocs(query(collection(db, 'referrals'), limit(50)));
+      const list: any[] = [];
+      snap.forEach((d) => {
+        list.push({ id: d.id, ...d.data() });
+      });
+      setReferralPayoutRecords(list);
+      hasLoadedReferralsRef.current = true;
+    } catch (err) {
+      console.warn('Error loading referral payouts:', err);
+      checkAndHandleQuotaError(err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'referrals' && !hasLoadedReferralsRef.current) {
+      loadReferralPayouts();
+    }
+  }, [activeTab]);
+
+  const customerReferralPayoutStats = useMemo(() => {
+    const map: Record<string, { referrerId: string; totalReferrals: number; successfulConversions: number; totalPoints: number; totalRupeeValue: number; records: any[]; isEligible: boolean }> = {};
+
+    referralPayoutRecords.forEach((r) => {
+      const id = r.referrerCustomerId || 'UNKNOWN';
+      if (!map[id]) {
+        map[id] = {
+          referrerId: id,
+          totalReferrals: 0,
+          successfulConversions: 0,
+          totalPoints: 0,
+          totalRupeeValue: 0,
+          records: [],
+          isEligible: false,
+        };
+      }
+      map[id].totalReferrals += 1;
+      map[id].records.push(r);
+      if (r.status === 'REWARDED' || r.status === 'QUALIFIED') {
+        map[id].successfulConversions += 1;
+        if (r.status === 'REWARDED') {
+          const pts = Number(r.rewardPoints) || 500;
+          map[id].totalPoints += pts;
+          map[id].totalRupeeValue += pts;
+        }
+      }
+    });
+
+    return Object.values(map).map((item) => {
+      const isEligible = item.totalRupeeValue >= 500;
+      return {
+        ...item,
+        isEligible,
+      };
+    }).sort((a, b) => b.totalRupeeValue - a.totalRupeeValue);
+  }, [referralPayoutRecords]);
+
+  const handleProcessCustomerReferralPayout = async (stat: typeof customerReferralPayoutStats[0]) => {
+    if (stat.totalRupeeValue < 500) {
+      addToast({ title: 'Threshold Notice', message: `Customer referral rewards (₹${stat.totalRupeeValue}) have not reached the minimum threshold of ₹500.`, type: 'info' });
+      return;
+    }
+
+    if (!window.confirm(`क्या आप ${stat.referrerId} के ₹${stat.totalRupeeValue} के referral rewards पेआउट को प्रोसेस करना चाहते हैं?`)) {
+      return;
+    }
+
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': userProfile?.email || 'deepakbuildconbhopal@gmail.com',
+        'x-admin-role': 'admin',
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const response = await fetch('/api/payouts/process', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          bookingId: `REF_PAYOUT_${stat.referrerId}_${Date.now()}`,
+          serviceManId: stat.referrerId,
+          serviceManName: `Customer Promotor #${stat.referrerId.substring(0, 8)}`,
+          serviceManPhone: '+91 98260 12345',
+          grossAmount: stat.totalRupeeValue,
+          companyCommissionRate: 0,
+          taxRate: 0,
+          payoutMethod: 'upi_instant',
+          upiOrBank: `UPI: ${stat.referrerId}@okhdfcbank`,
+          adminUsername: userProfile?.name || 'DEEPAK (Admin)',
+          notes: `Customer Referral Reward Payout (Threshold >= ₹500 reached)`,
+        }),
+      });
+
+      const jsonResult = await safeFetchJson(response);
+      const data = jsonResult.data;
+
+      await addDoc(collection(db, 'payouts'), {
+        type: 'customer_referral',
+        referrerCustomerId: stat.referrerId,
+        amount: stat.totalRupeeValue,
+        status: 'processed',
+        payoutRazorpayId: data?.payout?.payoutRazorpayId || `PAYOUT_REF_${Date.now()}`,
+        createdAt: new Date().toISOString(),
+      });
+
+      addToast({
+        title: 'सफल / Referral Payout Processed!',
+        message: `₹${stat.totalRupeeValue} payout successfully processed for customer #${stat.referrerId.substring(0, 8)}.`,
+        type: 'success',
+      });
+
+      loadReferralPayouts();
+      if (onRefresh) onRefresh();
+    } catch (err: any) {
+      addToast({ title: 'Payout Error', message: err.message || 'Failed to process referral payout.', type: 'error' });
+    }
+  };
+
+  const handleBulkReferralPayouts = async () => {
+    const eligibleItems = customerReferralPayoutStats.filter((s) => s.isEligible);
+    if (eligibleItems.length === 0) {
+      addToast({ title: 'Notice', message: 'No eligible customer referral payouts found meeting the ₹500 threshold.', type: 'info' });
+      return;
+    }
+
+    if (!window.confirm(`क्या आप सभी ${eligibleItems.length} योग्य कस्टमर referral पेआउट्स को प्रोसेस करना चाहते हैं?`)) {
+      return;
+    }
+
+    let count = 0;
+    for (const item of eligibleItems) {
+      try {
+        await handleProcessCustomerReferralPayout(item);
+        count++;
+      } catch (e) {
+        console.warn('Bulk referral payout item error:', e);
+      }
+    }
+
+    addToast({ title: 'Bulk Payout Complete', message: `Successfully processed ${count} customer referral payouts.`, type: 'success' });
+  };
+
+  // Multilevel Ledgers & Commissions State
+  const [ledgers, setLedgers] = useState<LedgerEntry[]>([]);
+  const [selectedLedgerRole, setSelectedLedgerRole] = useState<string>('all');
+  const [loadingLedgers, setLoadingLedgers] = useState(false);
+  const [refundModalItem, setRefundModalItem] = useState<{ paymentId: string; amount: number; bookingId: string } | null>(null);
+  const [refundReasonText, setRefundReasonText] = useState('Customer cancellation / service adjustment');
+  const [refundProcessing, setRefundProcessing] = useState(false);
+
+  const loadLedgers = async () => {
+    setLoadingLedgers(true);
+    try {
+      const data = await getAllPlatformLedgers();
+      setLedgers(data);
+    } catch (err: any) {
+      console.warn('Error loading ledgers:', err?.message);
+    } finally {
+      setLoadingLedgers(false);
+    }
+  };
+
+  React.useEffect(() => {
+    loadLedgers();
+  }, [activeTab]);
+
+  const handleExecuteRefund = async () => {
+    if (!refundModalItem) return;
+    setRefundProcessing(true);
+    try {
+      const res = await triggerPaymentRefund(refundModalItem.paymentId, refundModalItem.amount, refundReasonText);
+      addToast(res.message || 'Refund successfully processed and commission ledgers reversed.', 'success');
+      setRefundModalItem(null);
+      await loadLedgers();
+      if (onRefresh) onRefresh();
+    } catch (err: any) {
+      addToast(err?.message || 'Failed to process refund.', 'error');
+    } finally {
+      setRefundProcessing(false);
+    }
+  };
+
+  const ledgerStats = useMemo(() => {
+    let companyTotal = 0;
+    let franchiseTotal = 0;
+    let partnerTotal = 0;
+    let servicemanTotal = 0;
+    let reversedTotal = 0;
+
+    ledgers.forEach((l) => {
+      if (l.type === 'credit' && !l.isReversed) {
+        if (l.ledgerOwnerRole === 'company') companyTotal += l.amount;
+        else if (l.ledgerOwnerRole === 'franchise') franchiseTotal += l.amount;
+        else if (l.ledgerOwnerRole === 'partner' || l.ledgerOwnerRole === 'brand_promoter') partnerTotal += l.amount;
+        else if (l.ledgerOwnerRole === 'service_man') servicemanTotal += l.amount;
+      } else if (l.type === 'debit' || l.isReversed) {
+        reversedTotal += l.amount;
+      }
+    });
+
+    return {
+      companyTotal,
+      franchiseTotal,
+      partnerTotal,
+      servicemanTotal,
+      reversedTotal,
+      totalLedgers: ledgers.length,
+    };
+  }, [ledgers]);
+
+  const filteredLedgers = useMemo(() => {
+    return ledgers.filter((l) => {
+      const matchesRole = selectedLedgerRole === 'all' || l.ledgerOwnerRole === selectedLedgerRole;
+      const matchesSearch =
+        !searchTerm.trim() ||
+        l.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        l.bookingId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        l.paymentId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (l.ledgerOwnerName && l.ledgerOwnerName.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        l.description.toLowerCase().includes(searchTerm.toLowerCase());
+      return matchesRole && matchesSearch;
+    });
+  }, [ledgers, selectedLedgerRole, searchTerm]);
 
   // Processing & Modal States
   const [processingId, setProcessingId] = useState<string | null>(null);
@@ -214,9 +449,10 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
         }),
       });
 
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Payout transfer failed on server');
+      const jsonResult = await safeFetchJson(response);
+      const data = jsonResult.data;
+      if (!response.ok || !jsonResult.ok || !data?.success) {
+        throw new Error(data?.error || jsonResult.error || 'Payout transfer failed on server');
       }
 
       const payoutStatus = data.payout?.payoutStatus || data.payout?.status || 'processing';
@@ -347,8 +583,9 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
           }),
         });
 
-        const data = await response.json();
-        if (data.success) {
+        const jsonResult = await safeFetchJson(response);
+        const data = jsonResult.data;
+        if (response.ok && jsonResult.ok && data?.success) {
           const nowIso = new Date().toISOString();
           const payoutStatus = data.payout?.payoutStatus || data.payout?.status || 'processing';
           const payoutReference = data.payout?.payoutReference || data.payout?.payoutRazorpayId || null;
@@ -428,8 +665,9 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
             adminUsername: userProfile?.name || 'DEEPAK (Admin)',
           }),
         });
-        const data = await response.json();
-        if (data.success) {
+        const jsonResult = await safeFetchJson(response);
+        const data = jsonResult.data;
+        if (response.ok && jsonResult.ok && data?.success) {
           const nowIso = new Date().toISOString();
           const payoutStatus = data.payout?.payoutStatus || data.payout?.status || 'processing';
           const payoutReference = data.payout?.payoutReference || data.payout?.payoutRazorpayId || null;
@@ -666,6 +904,25 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
             </button>
 
             <button
+              onClick={() => setActiveTab('referrals')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                activeTab === 'referrals'
+                  ? 'bg-teal-600 text-white shadow-sm'
+                  : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/60'
+              }`}
+            >
+              <Gift className="w-3.5 h-3.5" />
+              <span>Customer Referral Payouts (≥ ₹500)</span>
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                  activeTab === 'referrals' ? 'bg-teal-900 text-teal-100' : 'bg-teal-100 text-teal-800'
+                }`}
+              >
+                {customerReferralPayoutStats.filter((s) => s.isEligible).length}
+              </span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('pros')}
               className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
                 activeTab === 'pros'
@@ -685,6 +942,25 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
             </button>
 
             <button
+              onClick={() => setActiveTab('ledgers')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                activeTab === 'ledgers'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/60'
+              }`}
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Multilevel Ledgers &amp; Commissions</span>
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                  activeTab === 'ledgers' ? 'bg-indigo-900 text-indigo-100' : 'bg-indigo-100 text-indigo-800'
+                }`}
+              >
+                {ledgers.length}
+              </span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('all')}
               className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                 activeTab === 'all'
@@ -692,7 +968,7 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
                   : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/60'
               }`}
             >
-              <span>All Ledger</span>
+              <span>All Bookings Payouts</span>
               <span className="text-[10px] opacity-70">({payoutRecords.length})</span>
             </button>
           </div>
@@ -767,6 +1043,89 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
           </div>
         </div>
       </div>
+
+      {/* VIEW: CUSTOMER REFERRAL PAYOUTS (Min Threshold ₹500) */}
+      {activeTab === 'referrals' && (
+        <div className="space-y-4">
+          <div className="p-4 bg-teal-50/80 border border-teal-200 rounded-3xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs text-teal-900">
+            <div className="flex items-start gap-3">
+              <Gift className="w-5 h-5 text-teal-700 shrink-0 mt-0.5" />
+              <div>
+                <strong className="font-bold text-sm">Automated Customer Referral Payouts (Threshold: ₹500):</strong>
+                <p className="text-xs text-teal-800 mt-0.5">
+                  Customers who accumulate ₹500 or more in referral rewards are automatically eligible for payout. Click <strong>Process Payouts</strong> to transfer rewards instantly via Razorpay/UPI.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleBulkReferralPayouts}
+              className="px-4 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-600 text-white font-black text-xs shadow-md transition flex items-center gap-2 cursor-pointer shrink-0"
+            >
+              <Zap className="w-4 h-4 text-amber-300" />
+              <span>Process All Eligible Payouts</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {customerReferralPayoutStats.map((stat) => (
+              <div
+                key={stat.referrerId}
+                className={`bg-white rounded-3xl border p-5 shadow-xs flex flex-col justify-between space-y-4 ${
+                  stat.isEligible ? 'border-teal-300 ring-1 ring-teal-300/30' : 'border-stone-200 opacity-80'
+                }`}
+              >
+                <div className="flex items-start justify-between">
+                  <div>
+                    <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">Customer ID</span>
+                    <h4 className="text-sm font-black text-stone-900 mt-0.5 font-mono">#{stat.referrerId.substring(0, 12)}</h4>
+                  </div>
+                  <span
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                      stat.isEligible
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        : 'bg-amber-100 text-amber-800 border border-amber-300'
+                    }`}
+                  >
+                    {stat.isEligible ? '✅ Eligible (≥ ₹500)' : '⏳ Below ₹500 Threshold'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 bg-stone-50 p-3 rounded-2xl border border-stone-100 text-xs">
+                  <div>
+                    <span className="text-[10px] text-stone-500 font-semibold block">Successful Referrals</span>
+                    <span className="text-base font-black text-stone-900">{stat.successfulConversions} / {stat.totalReferrals}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-stone-500 font-semibold block">Total Reward Earned</span>
+                    <span className="text-base font-black text-teal-700">₹{stat.totalRupeeValue}</span>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-stone-100 flex items-center justify-between">
+                  <span className="text-[11px] text-stone-500">Min Threshold: ₹500</span>
+                  <button
+                    onClick={() => handleProcessCustomerReferralPayout(stat)}
+                    disabled={!stat.isEligible}
+                    className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shadow-sm ${
+                      stat.isEligible
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                        : 'bg-stone-200 text-stone-400 cursor-not-allowed'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Process Payouts</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+            {customerReferralPayoutStats.length === 0 && (
+              <div className="col-span-full py-12 text-center text-stone-500 font-medium bg-white rounded-3xl border border-stone-200">
+                No customer referral records found.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* VIEW: VERIFIED PROFESSIONALS ROSTER (With direct Consolidated 'Trigger Payout' Actions) */}
       {activeTab === 'pros' && (
@@ -863,7 +1222,7 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
                       <div className="flex justify-between">
                         <span>Payout Route:</span>
                         <strong className="text-blue-700 font-mono">
-                          {pro.phone ? `${pro.phone}@okhdfcbank` : '9826012345@okhdfcbank'}
+                          {pro.phone ? `${pro.phone}@okhdfcbank` : '6267546945@okhdfcbank'}
                         </strong>
                       </div>
                     </div>
@@ -906,8 +1265,272 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
         </div>
       )}
 
+      {/* VIEW: MULTILEVEL COMMISSION LEDGERS ARCHITECTURE */}
+      {activeTab === 'ledgers' && (
+        <div className="space-y-4">
+          {/* Architecture Visual Explainer Banner */}
+          <div className="bg-gradient-to-r from-indigo-900 via-purple-950 to-indigo-950 text-white rounded-3xl p-5 sm:p-6 shadow-md border border-indigo-500/30">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-300 bg-indigo-500/20 px-2.5 py-1 rounded-full border border-indigo-400/20 inline-block mb-2">
+                  HARDINKAAM Centralized Commission Architecture
+                </span>
+                <h3 className="text-base sm:text-lg font-black text-white">
+                  Customer Payment → Admin Razorpay → Cryptographic Verification → Multilevel Ledgers
+                </h3>
+                <p className="text-xs text-indigo-200 mt-1 max-w-2xl leading-relaxed">
+                  ग्राहकों का सम्पूर्ण ऑनलाइन भुगतान सीधे <strong>HARDINKAAM Admin के Razorpay खाते</strong> में प्राप्त होता है। सत्यापन उपरांत कमीशन इंजन द्वारा स्वचालित रूप से कम्पनी, फ्रेंचाइजी, पार्टनर एवं सर्विसमैन के अलग-अलग लेजर प्रविष्टियों में आबंटित किया जाता है।
+                </p>
+              </div>
+
+              <button
+                onClick={loadLedgers}
+                disabled={loadingLedgers}
+                className="px-4 py-2 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-2 transition cursor-pointer self-start md:self-auto shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loadingLedgers ? 'animate-spin' : ''}`} />
+                <span>Refresh Ledgers</span>
+              </button>
+            </div>
+
+            {/* Multilevel Ledger Breakdown Summary */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-4 pt-4 border-t border-indigo-800/60 text-xs">
+              <div className="p-3 rounded-2xl bg-indigo-950/60 border border-indigo-500/20">
+                <span className="text-[10px] text-indigo-300 font-semibold block uppercase">Company Platform Share</span>
+                <span className="text-lg font-black text-amber-400 mt-0.5 block">₹{ledgerStats.companyTotal}</span>
+                <span className="text-[10px] text-indigo-300">15% Standard Retained</span>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-indigo-950/60 border border-indigo-500/20">
+                <span className="text-[10px] text-indigo-300 font-semibold block uppercase">Franchise Commissions</span>
+                <span className="text-lg font-black text-purple-300 mt-0.5 block">₹{ledgerStats.franchiseTotal}</span>
+                <span className="text-[10px] text-indigo-300">District Territory Earning</span>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-indigo-950/60 border border-indigo-500/20">
+                <span className="text-[10px] text-indigo-300 font-semibold block uppercase">Partner / Referral</span>
+                <span className="text-lg font-black text-blue-300 mt-0.5 block">₹{ledgerStats.partnerTotal}</span>
+                <span className="text-[10px] text-indigo-300">Brand Promoter Margin</span>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-indigo-950/60 border border-indigo-500/20">
+                <span className="text-[10px] text-indigo-300 font-semibold block uppercase">Serviceman Earnings</span>
+                <span className="text-lg font-black text-emerald-400 mt-0.5 block">₹{ledgerStats.servicemanTotal}</span>
+                <span className="text-[10px] text-indigo-300">Direct Service Share</span>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-indigo-950/60 border border-indigo-500/20">
+                <span className="text-[10px] text-indigo-300 font-semibold block uppercase">Reversals / Refunds</span>
+                <span className="text-lg font-black text-rose-400 mt-0.5 block">₹{ledgerStats.reversedTotal}</span>
+                <span className="text-[10px] text-rose-300">Reversed Commission</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Ledger Table Container */}
+          <div className="bg-white rounded-3xl border border-stone-200 shadow-xs overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-stone-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold text-stone-900">
+                  Multilevel Commission Ledgers &amp; Internal Audit
+                </h2>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
+                  {filteredLedgers.length} entries
+                </span>
+              </div>
+
+              {/* Role Filter Pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto text-xs">
+                {[
+                  { id: 'all', label: 'All Roles' },
+                  { id: 'company', label: 'Company Share' },
+                  { id: 'franchise', label: 'Franchise' },
+                  { id: 'partner', label: 'Partner / Referral' },
+                  { id: 'service_man', label: 'Service Pro' },
+                ].map((rf) => (
+                  <button
+                    key={rf.id}
+                    onClick={() => setSelectedLedgerRole(rf.id)}
+                    className={`px-3 py-1.5 rounded-xl font-bold transition whitespace-nowrap cursor-pointer ${
+                      selectedLedgerRole === rf.id
+                        ? 'bg-stone-900 text-white'
+                        : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                    }`}
+                  >
+                    {rf.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {loadingLedgers ? (
+              <div className="p-12 text-center text-stone-400">
+                <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin text-indigo-500" />
+                <p className="text-xs font-semibold text-stone-600">Loading platform commission ledgers...</p>
+              </div>
+            ) : filteredLedgers.length === 0 ? (
+              <div className="p-12 text-center text-stone-400">
+                <FileSpreadsheet className="w-10 h-10 mx-auto mb-2 opacity-40 text-stone-400" />
+                <p className="text-sm font-semibold text-stone-700">No ledger entries found</p>
+                <p className="text-xs text-stone-400 mt-1">
+                  Commission ledger entries are automatically generated when customers pay via Admin Razorpay.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-stone-600">
+                  <thead className="bg-stone-50 text-[11px] font-bold text-stone-500 uppercase tracking-wider border-b border-stone-200">
+                    <tr>
+                      <th className="py-3 px-4">Ledger Ref / Date</th>
+                      <th className="py-3 px-4">Attributed Entity</th>
+                      <th className="py-3 px-4">Booking &amp; Payment Link</th>
+                      <th className="py-3 px-4">Commission Rule</th>
+                      <th className="py-3 px-4 text-right">Credit / Debit</th>
+                      <th className="py-3 px-4 text-center">Status</th>
+                      <th className="py-3 px-4 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100 font-medium">
+                    {filteredLedgers.map((ledger) => {
+                      const isCredit = ledger.type === 'credit';
+                      const isReversed = ledger.status === 'reversed' || ledger.isReversed;
+
+                      return (
+                        <tr
+                          key={ledger.id}
+                          className={`transition-colors ${
+                            isReversed
+                              ? 'bg-rose-50/20 hover:bg-rose-50/40 text-stone-400'
+                              : 'hover:bg-stone-50/80'
+                          }`}
+                        >
+                          {/* Ledger ID & Date */}
+                          <td className="py-3 px-4">
+                            <span className="font-mono font-bold text-stone-900 block text-[11px]">
+                              {ledger.id}
+                            </span>
+                            <span className="text-[10px] text-stone-400">
+                              {new Date(ledger.createdAt).toLocaleString()}
+                            </span>
+                          </td>
+
+                          {/* Attributed Entity */}
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full ${
+                                  ledger.ledgerOwnerRole === 'company'
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : ledger.ledgerOwnerRole === 'franchise'
+                                    ? 'bg-purple-100 text-purple-800'
+                                    : ledger.ledgerOwnerRole === 'partner' || ledger.ledgerOwnerRole === 'brand_promoter'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : 'bg-emerald-100 text-emerald-800'
+                                }`}
+                              >
+                                {ledger.ledgerOwnerRole === 'company'
+                                  ? 'Company Share'
+                                  : ledger.ledgerOwnerRole === 'franchise'
+                                  ? 'Franchise Partner'
+                                  : ledger.ledgerOwnerRole === 'partner' || ledger.ledgerOwnerRole === 'brand_promoter'
+                                  ? 'Brand Partner'
+                                  : 'Service Pro'}
+                              </span>
+                            </div>
+                            <span className="text-[11px] font-bold text-stone-800 block mt-1">
+                              {ledger.ledgerOwnerName || ledger.ledgerOwnerId}
+                            </span>
+                            <span className="text-[10px] text-stone-400 font-mono">
+                              UID: {ledger.ledgerOwnerId}
+                            </span>
+                          </td>
+
+                          {/* Booking & Payment Link */}
+                          <td className="py-3 px-4">
+                            <span className="font-mono font-bold text-stone-800 block">
+                              Booking: #{ledger.bookingId}
+                            </span>
+                            <span className="text-[10px] text-stone-500 font-mono block">
+                              Payment: {ledger.paymentId}
+                            </span>
+                            {ledger.razorpayOrderId && (
+                              <span className="text-[9px] text-stone-400 font-mono block">
+                                Order: {ledger.razorpayOrderId}
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Commission Rule */}
+                          <td className="py-3 px-4">
+                            <span className="font-bold text-stone-800 block text-[11px]">
+                              {ledger.ruleReference}
+                            </span>
+                            <span className="text-[10px] text-stone-500">
+                              Gross: ₹{ledger.grossBookingAmount} ({ledger.ratePercent}%)
+                            </span>
+                          </td>
+
+                          {/* Credit / Debit Amount */}
+                          <td className="py-3 px-4 text-right">
+                            <span
+                              className={`text-sm font-black ${
+                                isReversed
+                                  ? 'text-rose-500 line-through'
+                                  : isCredit
+                                  ? 'text-emerald-700'
+                                  : 'text-rose-700'
+                              }`}
+                            >
+                              {isCredit ? '+' : '-'}₹{ledger.amount}
+                            </span>
+                            <span className="text-[10px] text-stone-400 block uppercase">
+                              {ledger.type}
+                            </span>
+                          </td>
+
+                          {/* Status */}
+                          <td className="py-3 px-4 text-center">
+                            {isReversed ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                Reversed
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Cleared
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Action */}
+                          <td className="py-3 px-4 text-right">
+                            {!isReversed && (
+                              <button
+                                onClick={() =>
+                                  setRefundModalItem({
+                                    paymentId: ledger.paymentId,
+                                    amount: ledger.grossBookingAmount,
+                                    bookingId: ledger.bookingId,
+                                  })
+                                }
+                                className="px-2.5 py-1 rounded-lg text-[10px] font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition cursor-pointer"
+                              >
+                                Refund / Reverse
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* VIEW: SETTLEMENTS & PENDING PAYOUTS MASTER TABLE */}
-      {activeTab !== 'pros' && (
+      {activeTab !== 'pros' && activeTab !== 'ledgers' && (
         <div className="bg-white rounded-3xl border border-stone-200 shadow-xs overflow-hidden">
           <div className="p-4 sm:p-5 border-b border-stone-100 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1008,9 +1631,9 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
                             <span className="font-bold text-stone-900 block">{item.serviceManName || 'Verified Professional'}</span>
                             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                           </div>
-                          <span className="text-[10px] text-stone-500 block">{item.serviceManPhone || '+91 98260 12345'}</span>
+                          <span className="text-[10px] text-stone-500 block">{item.serviceManPhone || '+91 62675 46945'}</span>
                           <span className="text-[10px] text-blue-700 block mt-0.5 font-mono">
-                            UPI: {item.serviceManPhone ? `${item.serviceManPhone}@okhdfcbank` : '9826012345@okhdfcbank'}
+                            UPI: {item.serviceManPhone ? `${item.serviceManPhone}@okhdfcbank` : '6267546945@okhdfcbank'}
                           </span>
                         </td>
 
@@ -1057,7 +1680,7 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
                             <div className="flex items-center justify-end gap-2">
                               <div className="text-[10px] text-right">
                                 <span className="font-mono block text-emerald-700 font-bold">
-                                  {item.payoutRazorpayId || item.payoutReference || 'Transfer Confirmed'}
+                                  {item.payoutRazorpayId || (item as any).payoutReference || 'Transfer Confirmed'}
                                 </span>
                                 <span className="text-stone-400">
                                   {item.payoutPaidAt ? new Date(item.payoutPaidAt).toLocaleDateString() : 'Settled'}
@@ -1127,7 +1750,7 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
                     <span className="font-bold text-sm text-stone-900">{triggerPayoutModalItem.serviceManName}</span>
                     <ShieldCheck className="w-4 h-4 text-emerald-600" />
                   </div>
-                  <span className="text-xs text-stone-500">{triggerPayoutModalItem.serviceManPhone || '+91 98260 12345'}</span>
+                  <span className="text-xs text-stone-500">{triggerPayoutModalItem.serviceManPhone || '+91 62675 46945'}</span>
                 </div>
 
                 <div className="text-right">
@@ -1135,7 +1758,7 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
                   <span className="text-xs font-bold text-blue-700 font-mono">
                     {triggerPayoutModalItem.serviceManPhone
                       ? `${triggerPayoutModalItem.serviceManPhone}@okhdfcbank`
-                      : '9826012345@okhdfcbank'}
+                      : '6267546945@okhdfcbank'}
                   </span>
                 </div>
               </div>
@@ -1219,7 +1842,7 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
               <div>
                 <span className="font-bold text-stone-800">Automated Notification:</span>
                 <p className="text-[10px] text-stone-500 mt-0.5">
-                  An instant in-app alert &amp; WhatsApp message will be dispatched to {triggerPayoutModalItem.serviceManPhone || '+91 98260 12345'} upon confirmation.
+                  An instant in-app alert &amp; WhatsApp message will be dispatched to {triggerPayoutModalItem.serviceManPhone || '+91 62675 46945'} upon confirmation.
                 </p>
               </div>
             </div>
@@ -1308,7 +1931,7 @@ export const AdminPayoutsManager: React.FC<Props> = ({ bookings, serviceMen, onR
                 <div className="flex justify-between">
                   <span>Phone / UPI:</span>
                   <strong className="text-blue-700 font-mono">
-                    {viewReceiptItem.serviceManPhone ? `${viewReceiptItem.serviceManPhone}@okhdfcbank` : '9826012345@okhdfcbank'}
+                    {viewReceiptItem.serviceManPhone ? `${viewReceiptItem.serviceManPhone}@okhdfcbank` : '6267546945@okhdfcbank'}
                   </strong>
                 </div>
               </div>

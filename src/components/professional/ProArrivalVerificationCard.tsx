@@ -19,8 +19,10 @@ import {
   HelpCircle,
   Home,
   BellRing,
+  QrCode,
+  Camera,
 } from 'lucide-react';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, collection, addDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { Booking, ServiceManLocationData } from '../../types';
 import { useNotifications } from '../../context/NotificationContext';
@@ -35,12 +37,18 @@ import {
   handleServiceManUnableToReach,
 } from '../../services/serviceTrackingService';
 import { verifyArrivalOtpServer } from '../../services/arrivalOtpService';
+import {
+  notifyOnTheWay,
+  notifyArrived,
+  notifyReassignment,
+} from '../../services/bookingNotificationIntegrationService';
 
 interface Props {
   booking: Booking;
   currentUserId?: string;
   onOpenChat?: (booking: Booking) => void;
   onStatusUpdated?: () => void;
+  onOpenQrScanner?: (booking: Booking) => void;
 }
 
 export const ProArrivalVerificationCard: React.FC<Props> = ({
@@ -48,6 +56,7 @@ export const ProArrivalVerificationCard: React.FC<Props> = ({
   currentUserId,
   onOpenChat,
   onStatusUpdated,
+  onOpenQrScanner,
 }) => {
   const { sendNotification } = useNotifications();
   const [enteredOtp, setEnteredOtp] = useState<string>('');
@@ -140,16 +149,8 @@ export const ProArrivalVerificationCard: React.FC<Props> = ({
         updatedAt: nowIso,
       });
 
-      // Send Customer notification
-      if (booking.customerId) {
-        await sendNotification({
-          userId: booking.customerId,
-          title: 'Professional On The Way! 🛵',
-          message: `${booking.serviceManName || 'Your Service Professional'} is on the way to your location. Check live ETA on tracking.`,
-          type: 'booking',
-          link: booking.id,
-        });
-      }
+      // Send Customer notification (deduplicated)
+      await notifyOnTheWay(booking);
 
       if (permissionGranted) {
         startProLocationTracking(
@@ -199,16 +200,8 @@ export const ProArrivalVerificationCard: React.FC<Props> = ({
       stopProLocationTracking(booking.id);
       setIsTrackingGps(false);
 
-      // Send customer arrival notification
-      if (booking.customerId) {
-        await sendNotification({
-          userId: booking.customerId,
-          title: 'Professional Arrived 📍',
-          message: 'आपके Service Professional पहुँच गए हैं। कृपया 4-अंकों का OTP साझा करें।',
-          type: 'booking',
-          link: booking.id,
-        });
-      }
+      // Send customer arrival notification (deduplicated)
+      await notifyArrived(booking);
 
       if (onStatusUpdated) onStatusUpdated();
     } catch (err: any) {
@@ -230,27 +223,8 @@ export const ProArrivalVerificationCard: React.FC<Props> = ({
       );
 
       if (result.success) {
-        // Send Notification to customer
-        if (booking.customerId) {
-          await sendNotification({
-            userId: booking.customerId,
-            title: 'Technician Update ⚠️',
-            message: `Service Professional cannot reach your location due to ${selectedUnableReason}. We are finding another technician for you.`,
-            type: 'booking',
-            link: booking.id,
-          });
-        }
-
-        // Send Notification to Franchise Admin if present
-        if (booking.franchisePartnerId) {
-          await sendNotification({
-            userId: booking.franchisePartnerId,
-            title: 'Booking Reassignment Required ⚠️',
-            message: `Booking #${booking.id.slice(-6)} (${booking.serviceName}): Technician ${booking.serviceManName} unable to reach (${selectedUnableReason}). Please reassign an eligible technician.`,
-            type: 'booking',
-            link: booking.id,
-          });
-        }
+        // Send Notification to customer & franchise (deduplicated)
+        await notifyReassignment(booking, selectedUnableReason);
 
         setShowUnableModal(false);
         if (onStatusUpdated) onStatusUpdated();
@@ -324,6 +298,25 @@ export const ProArrivalVerificationCard: React.FC<Props> = ({
     );
   }
 
+  const handleSendProQuickMessage = async (text: string) => {
+    try {
+      const nowIso = new Date().toISOString();
+      await addDoc(collection(db, 'messages'), {
+        bookingId: booking.id,
+        senderId: booking.serviceManId || currentUserId || 'pro_serviceman',
+        senderName: booking.serviceManName || 'Technician',
+        receiverId: booking.customerId,
+        text,
+        timestamp: nowIso,
+        read: false,
+      });
+      if (onOpenChat) onOpenChat(booking);
+    } catch (err) {
+      console.error('Failed to send pro quick message:', err);
+      if (onOpenChat) onOpenChat(booking);
+    }
+  };
+
   return (
     <div
       id={`pro-tracking-card-${booking.id}`}
@@ -377,6 +370,32 @@ export const ProArrivalVerificationCard: React.FC<Props> = ({
             <span>Open in Maps</span>
           </button>
         </div>
+      </div>
+
+      {/* Pro Quick Status Update Messages */}
+      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+        <span className="text-[10px] font-semibold text-stone-500 uppercase tracking-wider">Quick Updates:</span>
+        <button
+          type="button"
+          onClick={() => handleSendProQuickMessage('मैं रास्ते में हूँ')}
+          className="text-[11px] px-2.5 py-1 rounded-full bg-stone-100 hover:bg-orange-50 hover:text-orange-700 hover:border-orange-300 text-stone-700 border border-stone-200 font-medium transition-colors cursor-pointer"
+        >
+          मैं रास्ते में हूँ
+        </button>
+        <button
+          type="button"
+          onClick={() => handleSendProQuickMessage('मैं लगभग 10 मिनट में पहुँचूँगा')}
+          className="text-[11px] px-2.5 py-1 rounded-full bg-stone-100 hover:bg-orange-50 hover:text-orange-700 hover:border-orange-300 text-stone-700 border border-stone-200 font-medium transition-colors cursor-pointer"
+        >
+          मैं लगभग 10 मिनट में पहुँचूँगा
+        </button>
+        <button
+          type="button"
+          onClick={() => handleSendProQuickMessage('मैं पहुँच गया हूँ')}
+          className="text-[11px] px-2.5 py-1 rounded-full bg-stone-100 hover:bg-orange-50 hover:text-orange-700 hover:border-orange-300 text-stone-700 border border-stone-200 font-medium transition-colors cursor-pointer"
+        >
+          मैं पहुँच गया हूँ
+        </button>
       </div>
 
       {/* Real-Time Customer Availability Note if confirmed */}
@@ -541,6 +560,41 @@ export const ProArrivalVerificationCard: React.FC<Props> = ({
                   Required
                 </span>
               </div>
+
+              {/* Instant QR Code Scanner Button */}
+              {onOpenQrScanner && (
+                <div className="p-3 bg-white rounded-xl border border-orange-200 flex flex-col sm:flex-row items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2.5 text-left w-full sm:w-auto">
+                    <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-600 flex items-center justify-center font-bold shrink-0">
+                      <QrCode className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-stone-900 block">
+                        Instant QR Code Verification
+                      </span>
+                      <span className="text-[11px] text-stone-500">
+                        Scan customer's booking QR with camera to initiate work instantly
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onOpenQrScanner(booking)}
+                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-black text-xs transition shadow-xs flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>Scan Customer QR</span>
+                  </button>
+                </div>
+              )}
+
+              {onOpenQrScanner && (
+                <div className="flex items-center gap-2 text-[10px] font-bold text-stone-400 my-1 justify-center">
+                  <div className="h-px bg-stone-200 flex-1" />
+                  <span>OR ENTER 4-DIGIT CODE MANUALLY</span>
+                  <div className="h-px bg-stone-200 flex-1" />
+                </div>
+              )}
 
               <form onSubmit={handleVerifyOtp} className="space-y-3">
                 <div className="flex flex-col sm:flex-row items-center gap-2.5">

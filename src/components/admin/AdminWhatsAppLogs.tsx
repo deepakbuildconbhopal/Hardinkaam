@@ -4,10 +4,12 @@ import { collection, onSnapshot, addDoc, query, orderBy, limit } from 'firebase/
 import { db } from '../../firebase/config';
 import { WhatsAppLog } from '../../types';
 import { formatWhatsAppPhone, formatWhatsAppVideoInviteMessage } from '../../utils/whatsappVideoCall';
+import { sendWhatsAppApiMessage } from '../../services/whatsappApiService';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../../utils/sparkQuotaGuard';
 
 export const AdminWhatsAppLogs: React.FC = () => {
   const [logs, setLogs] = useState<WhatsAppLog[]>([]);
-  const [recipientPhone, setRecipientPhone] = useState('+91 98260 12345');
+  const [recipientPhone, setRecipientPhone] = useState('+91 62675 46945');
   const [recipientName, setRecipientName] = useState('Customer');
   const [includeVideoCall, setIncludeVideoCall] = useState(false);
   const [messageBody, setMessageBody] = useState(
@@ -17,6 +19,7 @@ export const AdminWhatsAppLogs: React.FC = () => {
   const [showSendModal, setShowSendModal] = useState(false);
 
   useEffect(() => {
+    if (isResourceExhausted()) return;
     const q = query(collection(db, 'whatsapp_logs'), limit(50));
     const unsub = onSnapshot(
       q,
@@ -28,6 +31,7 @@ export const AdminWhatsAppLogs: React.FC = () => {
       },
       (err) => {
         console.warn('WhatsApp logs snapshot notice:', err);
+        checkAndHandleQuotaError(err);
       }
     );
     return () => unsub();
@@ -48,20 +52,19 @@ export const AdminWhatsAppLogs: React.FC = () => {
         finalMessage += `\n\n📹 *लाइव वीडियो कॉल लिंक:*\n${videoMeetingUrl}\n🔑 रूम कोड: ${roomCode}`;
       }
 
-      // 1. Log to Firestore
-      await addDoc(collection(db, 'whatsapp_logs'), {
-        recipientPhone: recipientPhone.trim(),
+      // 1. Send through the secure server-side WhatsApp gateway.
+      const apiResult = await sendWhatsAppApiMessage({
+        phone: cleanPhone,
+        message: finalMessage,
+        eventType: includeVideoCall ? 'video_call_invite' : 'manual_notification',
         recipientName: recipientName.trim(),
-        type: includeVideoCall ? 'video_call_invite' : 'manual_notification',
-        messageBody: finalMessage,
-        status: 'sent',
-        roomCode: includeVideoCall ? roomCode : null,
-        timestamp: new Date().toISOString(),
       });
 
-      // 2. Open WhatsApp Web / App directly
-      const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(finalMessage)}`;
-      window.open(waUrl, '_blank', 'noopener,noreferrer');
+      // 2. If the gateway is not configured/available, preserve the direct WhatsApp fallback.
+      if (!apiResult.success) {
+        const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(finalMessage)}`;
+        window.open(waUrl, '_blank', 'noopener,noreferrer');
+      }
 
       setShowSendModal(false);
       setIncludeVideoCall(false);

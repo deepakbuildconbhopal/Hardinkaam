@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { FranchisePartner } from '../../types';
 import { ALL_INDIA_LOCATIONS } from '../../data/indiaLocations';
+import { generateSecureTemporaryPassword } from '../../utils/secureCredentials';
 import {
   createFranchisePartner,
   updateFranchiseStatus,
@@ -61,7 +62,7 @@ export const DistrictActivationModal: React.FC<Props> = ({
   const [newPartnerName, setNewPartnerName] = useState('');
   const [newPartnerEmail, setNewPartnerEmail] = useState('');
   const [newPartnerPhone, setNewPartnerPhone] = useState('');
-  const [newPartnerPassword, setNewPartnerPassword] = useState('123456');
+  const [newPartnerPassword, setNewPartnerPassword] = useState(() => generateSecureTemporaryPassword());
 
   // ZIP Upload
   const [zipFile, setZipFile] = useState<File | null>(null);
@@ -77,18 +78,21 @@ export const DistrictActivationModal: React.FC<Props> = ({
     if (!isOpen) return;
     const unsub = subscribeAllFranchisePartners((partners) => {
       setExistingPartners(partners);
-      // Auto match if partner already assigned for this district
-      const match = partners.find(
-        (p) => p.assignedDistrictId.toLowerCase() === selectedDistrict.toLowerCase()
-      );
-      if (match) {
-        setSelectedPartnerId(match.franchisePartnerId);
-      } else if (partners.length > 0 && !selectedPartnerId) {
-        setSelectedPartnerId(partners[0].franchisePartnerId);
-      }
     });
     return () => unsub();
-  }, [isOpen, selectedDistrict]);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || existingPartners.length === 0) return;
+    const match = existingPartners.find(
+      (p) => p.assignedDistrictId.toLowerCase() === selectedDistrict.toLowerCase()
+    );
+    if (match) {
+      setSelectedPartnerId(match.franchisePartnerId);
+    } else if (!selectedPartnerId) {
+      setSelectedPartnerId(existingPartners[0].franchisePartnerId);
+    }
+  }, [isOpen, selectedDistrict, existingPartners]);
 
   if (!isOpen) return null;
 
@@ -392,12 +396,21 @@ export const DistrictActivationModal: React.FC<Props> = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">प्रारंभिक पासवर्ड *</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold text-stone-700">प्रारंभिक सुरक्षित पासवर्ड *</label>
+                      <button
+                        type="button"
+                        onClick={() => setNewPartnerPassword(generateSecureTemporaryPassword())}
+                        className="text-[11px] font-bold text-orange-600 hover:text-orange-700 underline cursor-pointer"
+                      >
+                        नया पासवर्ड जनरेट करें
+                      </button>
+                    </div>
                     <input
                       type="text"
                       value={newPartnerPassword}
                       onChange={(e) => setNewPartnerPassword(e.target.value)}
-                      className="w-full bg-white border border-stone-300 rounded-xl px-3 py-2 text-xs font-bold"
+                      className="w-full bg-white border border-stone-300 rounded-xl px-3 py-2 text-xs font-mono font-bold"
                     />
                   </div>
                 </div>

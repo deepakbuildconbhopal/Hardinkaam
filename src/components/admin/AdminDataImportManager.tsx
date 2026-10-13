@@ -20,9 +20,10 @@ import {
   ArrowRight,
   Info,
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
-import { collection, doc, writeBatch, getDocs, deleteDoc, setDoc } from 'firebase/firestore';
+import type { WorkBook } from 'xlsx';
+import { collection, doc, writeBatch, getDocs, deleteDoc, setDoc, query, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../../utils/sparkQuotaGuard';
 import { Service, Category, ServiceMan } from '../../types';
 
 export interface AdminDataImportManagerProps {
@@ -69,7 +70,7 @@ export const AdminDataImportManager: React.FC<AdminDataImportManagerProps> = ({
   const [uploadedFileName, setUploadedFileName] = useState<string>('');
   const [sheetList, setSheetList] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState<string>('');
-  const [loadedWorkbook, setLoadedWorkbook] = useState<XLSX.WorkBook | null>(null);
+  const [loadedWorkbook, setLoadedWorkbook] = useState<WorkBook | null>(null);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [isMerging, setIsMerging] = useState<boolean>(false);
   const [mergeProgress, setMergeProgress] = useState<{ current: number; total: number } | null>(null);
@@ -101,31 +102,47 @@ export const AdminDataImportManager: React.FC<AdminDataImportManagerProps> = ({
       .replace(/[\s_-]+/g, '_')
       .replace(/^-+|-+$/g, ''), []);
 
-  // Fetch Master Database from Firestore
+  // Fetch Master Database from Firestore (bounded & quota-guarded)
   const fetchLiveMasterData = useCallback(async () => {
+    if (isResourceExhausted()) {
+      setIsScanningDuplicates(false);
+      return;
+    }
     setIsScanningDuplicates(true);
     setCleanerErrorMsg(null);
     try {
       const [srvSnap, catSnap, proSnap] = await Promise.all([
-        getDocs(collection(db, 'services')),
-        getDocs(collection(db, 'categories')),
-        getDocs(collection(db, 'serviceMen')),
+        getDocs(query(collection(db, 'services'), limit(100))).catch((e) => {
+          console.warn('[DataImportManager] Services fetch fallback notice:', e.message);
+          checkAndHandleQuotaError(e);
+          return { forEach: () => {} };
+        }),
+        getDocs(query(collection(db, 'categories'), limit(100))).catch((e) => {
+          console.warn('[DataImportManager] Categories fetch fallback notice:', e.message);
+          checkAndHandleQuotaError(e);
+          return { forEach: () => {} };
+        }),
+        getDocs(query(collection(db, 'service_men'), limit(100))).catch((e) => {
+          console.warn('[DataImportManager] ServiceMen fetch fallback notice:', e.message);
+          checkAndHandleQuotaError(e);
+          return { forEach: () => {} };
+        }),
       ]);
 
       const srvList: Service[] = [];
-      srvSnap.forEach((d) => srvList.push({ id: d.id, ...d.data() } as Service));
-      setLiveServices(srvList);
+      srvSnap.forEach((d: any) => srvList.push({ id: d.id, ...d.data() } as Service));
+      if (srvList.length > 0) setLiveServices(srvList);
 
       const catList: Category[] = [];
-      catSnap.forEach((d) => catList.push({ id: d.id, ...d.data() } as Category));
-      setLiveCategories(catList);
+      catSnap.forEach((d: any) => catList.push({ id: d.id, ...d.data() } as Category));
+      if (catList.length > 0) setLiveCategories(catList);
 
       const proList: ServiceMan[] = [];
-      proSnap.forEach((d) => proList.push({ id: d.id, ...d.data() } as ServiceMan));
-      setLiveServiceMen(proList);
+      proSnap.forEach((d: any) => proList.push({ id: d.id, ...d.data() } as ServiceMan));
+      if (proList.length > 0) setLiveServiceMen(proList);
     } catch (err: any) {
-      console.error('Error fetching live master records:', err);
-      setCleanerErrorMsg(`डेटाबेस लोड करने में समस्या: ${err.message || 'Unknown error'}`);
+      console.warn('[DataImportManager] Live master records load notice:', err?.message);
+      checkAndHandleQuotaError(err);
     } finally {
       setIsScanningDuplicates(false);
     }
@@ -194,7 +211,8 @@ Mahesh Verma Plumber,9826022334,mahesh.plumb@hardinkaam.in,Plumber,New Market & 
   };
 
   // Download sample .xlsx template
-  const handleDownloadExcelTemplate = () => {
+  const handleDownloadExcelTemplate = async () => {
+    const XLSX = await import('xlsx');
     const csvContent = sampleMergeData[targetCollection];
     const wb = XLSX.read(csvContent, { type: 'string' });
     XLSX.writeFile(wb, `hardinkaam_merge_template_${targetCollection}.xlsx`);
@@ -239,8 +257,9 @@ Mahesh Verma Plumber,9826022334,mahesh.plumb@hardinkaam.in,Plumber,New Market & 
     const isBinaryExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
 
     if (isBinaryExcel) {
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         try {
+          const XLSX = await import('xlsx');
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
           const workbook = XLSX.read(data, { type: 'array' });
           setLoadedWorkbook(workbook);
@@ -279,9 +298,10 @@ Mahesh Verma Plumber,9826022334,mahesh.plumb@hardinkaam.in,Plumber,New Market & 
     }
   };
 
-  const handleSheetChange = (sheet: string) => {
+  const handleSheetChange = async (sheet: string) => {
     setSelectedSheet(sheet);
     if (loadedWorkbook && loadedWorkbook.Sheets[sheet]) {
+      const XLSX = await import('xlsx');
       const worksheet = loadedWorkbook.Sheets[sheet];
       const csvText = XLSX.utils.sheet_to_csv(worksheet);
       setRawMergeText(csvText);

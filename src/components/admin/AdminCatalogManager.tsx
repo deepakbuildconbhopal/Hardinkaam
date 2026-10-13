@@ -34,12 +34,14 @@ import {
   Link2,
   Eye,
 } from 'lucide-react';
-import { doc, setDoc, deleteDoc, getDocs, collection, writeBatch } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, getDocs, collection, writeBatch, query, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { checkAndHandleQuotaError } from '../../utils/sparkQuotaGuard';
 import { Category, Service, ServiceMan } from '../../types';
-import * as XLSX from 'xlsx';
+import type { WorkBook } from 'xlsx';
 import { CategoryFirebaseImageUpload } from './CategoryFirebaseImageUpload';
 import { compressImageForWeb, formatBytes } from '../../utils/imageCompression';
+import { ensureAdminAuthToken } from '../../utils/apiHandler';
 
 interface Props {
   categories: Category[];
@@ -89,7 +91,7 @@ export const AdminCatalogManager: React.FC<Props> = ({
   const [bulkFileName, setBulkFileName] = useState<string>('');
   const [bulkSheetNames, setBulkSheetNames] = useState<string[]>([]);
   const [bulkSelectedSheet, setBulkSelectedSheet] = useState<string>('');
-  const [bulkWorkbook, setBulkWorkbook] = useState<XLSX.WorkBook | null>(null);
+  const [bulkWorkbook, setBulkWorkbook] = useState<WorkBook | null>(null);
   const [isBulkDragOver, setIsBulkDragOver] = useState<boolean>(false);
   const [bulkDuplicatePolicy, setBulkDuplicatePolicy] = useState<'skip_duplicates' | 'update_existing'>('skip_duplicates');
   const [bulkFilterDuplicatesInFile, setBulkFilterDuplicatesInFile] = useState<boolean>(true);
@@ -107,8 +109,8 @@ export const AdminCatalogManager: React.FC<Props> = ({
     if (serviceMen && serviceMen.length > 0) {
       setLoadedServiceMen(serviceMen);
     } else {
-      // Fetch servicemen from Firestore if empty
-      getDocs(collection(db, 'serviceMen'))
+      // Fetch servicemen from Firestore if empty (capped at 100)
+      getDocs(query(collection(db, 'serviceMen'), limit(100)))
         .then((snapshot) => {
           const list: ServiceMan[] = [];
           snapshot.forEach((docSnap) => {
@@ -118,7 +120,10 @@ export const AdminCatalogManager: React.FC<Props> = ({
             setLoadedServiceMen(list);
           }
         })
-        .catch((err) => console.warn('Could not fetch serviceMen for export:', err));
+        .catch((err) => {
+          console.warn('Could not fetch serviceMen for export:', err);
+          checkAndHandleQuotaError(err);
+        });
     }
   }, [serviceMen]);
 
@@ -219,7 +224,8 @@ Split AC Jet Foam Wash,AC & Appliance Repair,599,per AC,60,High pressure deep cl
 Bathroom Deep Sanitization,Cleaning & Disinfection,1299,per bathroom,90,Hard water stain removal floor tile scrubbing and mirror sanitization,https://images.unsplash.com/photo-1581578731548-c64695cc6952?w=600&auto=format&fit=crop&q=80`;
 
   // Download Sample Excel (.xlsx) file
-  const handleDownloadServicesExcelTemplate = () => {
+  const handleDownloadServicesExcelTemplate = async () => {
+    const XLSX = await import('xlsx');
     const workbook = XLSX.read(SAMPLE_SERVICES_CSV, { type: 'string' });
     XLSX.writeFile(workbook, `hardinkaam_bulk_services_template.xlsx`);
   };
@@ -430,8 +436,9 @@ Bathroom Deep Sanitization,Cleaning & Disinfection,1299,per bathroom,90,Hard wat
 
     if (isExcel) {
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         try {
+          const XLSX = await import('xlsx');
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
           const workbook = XLSX.read(data, { type: 'array' });
           setBulkWorkbook(workbook);
@@ -471,9 +478,10 @@ Bathroom Deep Sanitization,Cleaning & Disinfection,1299,per bathroom,90,Hard wat
     }
   };
 
-  const handleBulkSheetChange = (sheetName: string) => {
+  const handleBulkSheetChange = async (sheetName: string) => {
     setBulkSelectedSheet(sheetName);
     if (bulkWorkbook && bulkWorkbook.Sheets[sheetName]) {
+      const XLSX = await import('xlsx');
       const worksheet = bulkWorkbook.Sheets[sheetName];
       const csvText = XLSX.utils.sheet_to_csv(worksheet);
       setBulkInputText(csvText);
@@ -780,9 +788,10 @@ Bathroom Deep Sanitization,Cleaning & Disinfection,1299,per bathroom,90,Hard wat
   };
 
   // 4. Export Complete Master Excel (.xlsx) with 3 Worksheets
-  const handleExportAllExcel = () => {
+  const handleExportAllExcel = async () => {
     setIsExporting(true);
     try {
+      const XLSX = await import('xlsx');
       const dateStr = getFormattedDate();
       const wb = XLSX.utils.book_new();
 
@@ -1020,8 +1029,28 @@ Bathroom Deep Sanitization,Cleaning & Disinfection,1299,per bathroom,90,Hard wat
       setShowServiceModal(false);
       onRefresh();
     } catch (err: any) {
-      console.error('Save service failed:', err);
-      setServiceSaveError(err?.message || 'Failed to save service to database.');
+      console.warn('Direct Firestore save service failed, attempting server endpoint fallback:', err);
+      try {
+        const token = await ensureAdminAuthToken();
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        };
+        const res = await fetch('/api/admin/services', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ serviceId, data: cleanPayload }),
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || err?.message || 'Failed to save service');
+        }
+        setShowServiceModal(false);
+        onRefresh();
+      } catch (serverErr: any) {
+        console.error('Save service failed:', serverErr);
+        setServiceSaveError(serverErr?.message || 'Failed to save service to database.');
+      }
     } finally {
       setSaving(false);
     }
@@ -1032,8 +1061,25 @@ Bathroom Deep Sanitization,Cleaning & Disinfection,1299,per bathroom,90,Hard wat
     try {
       await deleteDoc(doc(db, 'services', srvId));
       onRefresh();
-    } catch (err) {
-      console.error('Delete service failed:', err);
+    } catch (err: any) {
+      console.warn('Direct Firestore delete service failed, attempting server endpoint fallback:', err);
+      try {
+        const token = await ensureAdminAuthToken();
+        const headers: Record<string, string> = {
+          'Authorization': `Bearer ${token}`,
+        };
+        const res = await fetch(`/api/admin/services/${encodeURIComponent(srvId)}`, {
+          method: 'DELETE',
+          headers,
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || err?.message || 'Failed to delete service');
+        }
+        onRefresh();
+      } catch (serverErr) {
+        console.error('Delete service failed:', serverErr);
+      }
     }
   };
 
@@ -1062,8 +1108,25 @@ Bathroom Deep Sanitization,Cleaning & Disinfection,1299,per bathroom,90,Hard wat
     try {
       await deleteDoc(doc(db, 'categories', catId));
       onRefresh();
-    } catch (err) {
-      console.error('Delete category failed:', err);
+    } catch (err: any) {
+      console.warn('Direct Firestore delete category failed, attempting server endpoint fallback:', err);
+      try {
+        const token = await ensureAdminAuthToken();
+        const headers: Record<string, string> = {
+          'Authorization': `Bearer ${token}`,
+        };
+        const res = await fetch(`/api/admin/categories/${encodeURIComponent(catId)}`, {
+          method: 'DELETE',
+          headers,
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || err?.message || 'Failed to delete category');
+        }
+        onRefresh();
+      } catch (serverErr) {
+        console.error('Delete category failed:', serverErr);
+      }
     }
   };
 
@@ -1099,8 +1162,32 @@ Bathroom Deep Sanitization,Cleaning & Disinfection,1299,per bathroom,90,Hard wat
       setEditingCategory(null);
       onRefresh();
     } catch (err: any) {
-      console.error('Save category failed:', err);
-      setCatSaveError(err?.message || 'Failed to save category to database.');
+      console.warn('Direct Firestore save category failed, attempting server endpoint fallback:', err);
+      try {
+        const token = await ensureAdminAuthToken();
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        };
+        const res = await fetch('/api/admin/categories', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ categoryId: catId, data: cleanPayload }),
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || err?.message || 'Failed to save category');
+        }
+        setShowCategoryModal(false);
+        setCatName('');
+        setCatDesc('');
+        setCatImageUrl('');
+        setEditingCategory(null);
+        onRefresh();
+      } catch (serverErr: any) {
+        console.error('Save category failed:', serverErr);
+        setCatSaveError(serverErr?.message || 'Failed to save category to database.');
+      }
     } finally {
       setSavingCat(false);
     }

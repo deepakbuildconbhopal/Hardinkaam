@@ -9,9 +9,11 @@ import {
   where,
   onSnapshot,
   serverTimestamp,
+  limit,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from '../firebase/config';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../utils/sparkQuotaGuard';
 import {
   FranchiseKYCSettings,
   KYCDocumentRecord,
@@ -23,6 +25,7 @@ import {
   FranchiseAgreementDocument,
   FranchiseAgreementAcceptanceRecord,
 } from '../types';
+import { compressImageForWeb } from '../utils/imageCompression';
 import { logAuditEvent } from './auditService';
 import {
   notifyAdminFranchiseAgreementSubmitted,
@@ -172,8 +175,9 @@ export function subscribeFranchiseKycDocuments(
  * Fetch all KYC documents across all franchise partners for Super Admin Review
  */
 export async function getAllFranchiseKycDocuments(): Promise<KYCDocumentRecord[]> {
+  if (isResourceExhausted()) return [];
   try {
-    const snap = await getDocs(collection(db, 'franchise_kyc_documents'));
+    const snap = await getDocs(query(collection(db, 'franchise_kyc_documents'), limit(50)));
     const docs: KYCDocumentRecord[] = [];
     snap.forEach((d) => {
       docs.push({ id: d.id, ...d.data() } as KYCDocumentRecord);
@@ -181,6 +185,7 @@ export async function getAllFranchiseKycDocuments(): Promise<KYCDocumentRecord[]
     return docs;
   } catch (err) {
     console.error('Error fetching all KYC docs:', err);
+    checkAndHandleQuotaError(err);
     return [];
   }
 }
@@ -414,13 +419,35 @@ export async function uploadFranchiseKycDocument(
       };
     }
 
-    // Convert file to Base64 data URL for secure passive storage & instant preview
-    const base64Data = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = (e) => reject(e);
-      reader.readAsDataURL(file);
-    });
+    // Convert file to optimized data URL for fast upload and instant preview
+    let base64Data = '';
+    let processedFileSize = file.size;
+
+    if (file.type.startsWith('image/')) {
+      try {
+        const compressed = await compressImageForWeb(file, {
+          maxDimension: 1200,
+          quality: 0.82,
+          maxSizeKB: 300,
+        });
+        base64Data = compressed.dataUrl;
+        processedFileSize = compressed.compressedSize;
+      } catch {
+        base64Data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = (e) => reject(e);
+          reader.readAsDataURL(file);
+        });
+      }
+    } else {
+      base64Data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = (e) => reject(e);
+        reader.readAsDataURL(file);
+      });
+    }
 
     const now = new Date().toISOString();
     const docRecordId = `${franchisePartnerId}_${documentType.toLowerCase()}`;
@@ -462,7 +489,7 @@ export async function uploadFranchiseKycDocument(
       documentTitle: DOCUMENT_TITLES[documentType]?.en || documentType,
       fileUrl: base64Data,
       fileName: file.name,
-      fileSize: file.size,
+      fileSize: processedFileSize,
       fileType: file.type || `application/${extension}`,
       status: 'PENDING',
       uploadedAt: now,
@@ -1077,8 +1104,13 @@ export function subscribeFranchiseAgreements(
 export function subscribeAllFranchiseAgreements(
   callback: (agreements: FranchiseAgreementRecord[]) => void
 ): () => void {
+  if (isResourceExhausted()) {
+    callback([]);
+    return () => {};
+  }
+
   try {
-    const q = collection(db, 'franchise_agreements');
+    const q = query(collection(db, 'franchise_agreements'), limit(50));
     return onSnapshot(
       q,
       (snap) => {
@@ -1095,10 +1127,12 @@ export function subscribeAllFranchiseAgreements(
       },
       (err) => {
         console.warn('All agreements listener note:', err);
+        checkAndHandleQuotaError(err);
       }
     );
   } catch (err) {
     console.warn('Error setting up all agreements listener:', err);
+    checkAndHandleQuotaError(err);
     return () => {};
   }
 }
@@ -1107,8 +1141,9 @@ export function subscribeAllFranchiseAgreements(
  * Fetch all Franchise Agreements across the platform
  */
 export async function getAllFranchiseAgreements(): Promise<FranchiseAgreementRecord[]> {
+  if (isResourceExhausted()) return [];
   try {
-    const snap = await getDocs(collection(db, 'franchise_agreements'));
+    const snap = await getDocs(query(collection(db, 'franchise_agreements'), limit(50)));
     const agreements: FranchiseAgreementRecord[] = [];
     snap.forEach((d) => {
       agreements.push({ id: d.id, ...d.data() } as FranchiseAgreementRecord);
@@ -1121,6 +1156,7 @@ export async function getAllFranchiseAgreements(): Promise<FranchiseAgreementRec
     return agreements;
   } catch (err) {
     console.error('Error fetching all franchise agreements:', err);
+    checkAndHandleQuotaError(err);
     return [];
   }
 }

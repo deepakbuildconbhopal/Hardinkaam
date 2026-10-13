@@ -12,6 +12,7 @@ import {
   Check,
   CheckCircle2,
   X,
+  XCircle,
   UserPlus,
   RefreshCw,
   User,
@@ -25,23 +26,36 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
+  Banknote,
+  PhoneCall,
+  MessageSquare,
+  Wallet,
 } from 'lucide-react';
-import { collection, getDocs, updateDoc, doc, setDoc, query, limit } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { collection, getDocs, updateDoc, doc, setDoc, addDoc, query, limit, where } from 'firebase/firestore';
+import { db, auth } from '../../firebase/config';
 import { UserRole, PasswordResetRequest } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { checkAndHandleQuotaError, isResourceExhausted } from '../../utils/sparkQuotaGuard';
 import { ManualPasswordResetUtility } from './ManualPasswordResetUtility';
+import { sendMemberRegistrationNotification } from '../../services/memberNotificationService';
+import { PhotoCaptureWidget } from '../common/PhotoCaptureWidget';
 
 export const AdminUsersManager: React.FC = () => {
   const { adminChangeUserCredentials } = useAuth();
   const [users, setUsers] = useState<any[]>([]);
   const [resetRequests, setResetRequests] = useState<PasswordResetRequest[]>([]);
   const [activeTab, setActiveTab] = useState<
-    'all' | 'manual_reset_utility' | 'reset_requests' | 'customers' | 'service_pros' | 'partners' | 'admins'
+    'all' | 'members_ledger' | 'pending_approvals' | 'manual_reset_utility' | 'reset_requests' | 'customers' | 'service_pros' | 'partners' | 'admins'
   >('all');
   const [selectedUserForUtility, setSelectedUserForUtility] = useState<any | null>(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [paymentFilter, setPaymentFilter] = useState<'all' | 'paid' | 'unpaid'>('all');
+
+  const [cashApprovals, setCashApprovals] = useState<any[]>([]);
+  const [approvingCashId, setApprovingCashId] = useState<string | null>(null);
+  const [rejectingCashId, setRejectingCashId] = useState<string | null>(null);
+  const [cashFilter, setCashFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('pending');
 
   // Spark Quota Optimization: Client-side pagination to handle users without lagging or unbounded DOM trees
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -54,6 +68,7 @@ export const AdminUsersManager: React.FC = () => {
   const [editPassword, setEditPassword] = useState('');
   const [editRole, setEditRole] = useState<UserRole>('customer');
   const [editPhone, setEditPhone] = useState('');
+  const [editAvatar, setEditAvatar] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [savingCredentials, setSavingCredentials] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -71,6 +86,69 @@ export const AdminUsersManager: React.FC = () => {
 
   // Revealed password map for table rows (allows Admin to inspect stored password if needed)
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
+  const [zeroingDeepakWallet, setZeroingDeepakWallet] = useState(false);
+
+  const handleZeroDeepakWallet = async () => {
+    if (!window.confirm("क्या आप वाकई दीपक (Deepak) का वॉलेट बैलेंस शून्य (Zero) करना चाहते हैं?")) return;
+    setZeroingDeepakWallet(true);
+    try {
+      const matchedUsers = users.filter(u => 
+        (u.name && u.name.toLowerCase().includes('deepak')) || 
+        (u.email && u.email.toLowerCase().includes('deepak'))
+      );
+
+      for (const u of matchedUsers) {
+        const uid = u.uid || u.id;
+        try {
+          await updateDoc(doc(db, 'users', uid), {
+            walletBalance: 0,
+            wallet: 0,
+            balance: 0,
+            totalEarned: 0,
+            pendingBalance: 0,
+            updatedAt: new Date().toISOString()
+          });
+        } catch (_) {}
+
+        try {
+          await setDoc(doc(db, 'wallets', uid), {
+            balance: 0,
+            pendingBalance: 0,
+            totalEarned: 0,
+            totalWithdrawn: 0,
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        } catch (_) {}
+      }
+
+      const walletsSnap = await getDocs(query(collection(db, 'wallets'), limit(50)));
+      for (const wDoc of walletsSnap.docs) {
+        const data = wDoc.data();
+        if (wDoc.id.toLowerCase().includes('deepak') || (data.userId && String(data.userId).toLowerCase().includes('deepak'))) {
+          await updateDoc(doc(db, 'wallets', wDoc.id), {
+            balance: 0,
+            pendingBalance: 0,
+            totalEarned: 0,
+            updatedAt: new Date().toISOString()
+          });
+        }
+      }
+
+      setStatusMsg({
+        type: 'success',
+        text: 'सफलतापूर्वक दीपक का वॉलेट बैलेंस शून्य कर दिया गया है!'
+      });
+      fetchUsersAndRequests();
+    } catch (err: any) {
+      checkAndHandleQuotaError(err);
+      setStatusMsg({
+        type: 'error',
+        text: 'वॉलेट शून्य करने में त्रुटि: ' + (err.message || 'Error')
+      });
+    } finally {
+      setZeroingDeepakWallet(false);
+    }
+  };
 
   const generateSecurePassword = () => {
     const prefixes = ['Kaam', 'Seva', 'Hardin', 'Bhopal', 'Mitra', 'Pro'];
@@ -82,24 +160,60 @@ export const AdminUsersManager: React.FC = () => {
   };
 
   const fetchUsersAndRequests = async () => {
+    if (isResourceExhausted()) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      // 1. Fetch Users (capped at 200 to protect Spark tier daily read quotas)
-      const usersSnap = await getDocs(query(collection(db, 'users'), limit(200)));
+      // 1. Fetch Users (capped at 50 to protect Spark tier daily read quotas)
+      const usersSnap = await getDocs(query(collection(db, 'users'), limit(50)));
       const list: any[] = [];
       usersSnap.forEach((d) => list.push({ uid: d.id, ...d.data() }));
       setUsers(list);
 
-      // 2. Fetch Password Reset Requests (capped at 100)
-      const rstSnap = await getDocs(query(collection(db, 'password_reset_requests'), limit(100)));
+      // 2. Fetch Password Reset Requests (capped at 30)
+      const rstSnap = await getDocs(query(collection(db, 'password_reset_requests'), limit(30)));
       const reqList: PasswordResetRequest[] = [];
       rstSnap.forEach((d) => reqList.push({ id: d.id, ...d.data() } as PasswordResetRequest));
       reqList.sort(
         (a, b) => new Date(b.requestedAt || 0).getTime() - new Date(a.requestedAt || 0).getTime()
       );
       setResetRequests(reqList);
+
+      // 3. Fetch Cash Registration Approvals (capped at 50)
+      const apprSnap = await getDocs(query(collection(db, 'registration_approvals'), limit(50)));
+      const apprList: any[] = [];
+      apprSnap.forEach((d) => apprList.push({ id: d.id, ...d.data() }));
+
+      // Also merge any users with pending cash approval who might not be in registration_approvals
+      list.forEach((u) => {
+        if (
+          (u.status === 'pending_approval' || u.registrationPaymentMethod === 'cash' || u.registrationPaymentStatus === 'pending_cash_approval') &&
+          !apprList.some((a) => a.userId === u.uid || a.id === u.uid)
+        ) {
+          apprList.push({
+            id: u.uid,
+            userId: u.uid,
+            name: u.name || 'Anonymous User',
+            email: u.email || '',
+            phone: u.phone || '',
+            role: u.role || 'customer',
+            amount: u.registrationFeeAmount || (u.role === 'business_partner' ? 1021 : 121),
+            memberCode: u.memberCode || '',
+            status: u.status === 'active' ? 'approved' : 'pending',
+            paymentMethod: 'cash',
+            requestedAt: u.cashRequestedAt || u.createdAt || new Date().toISOString(),
+            avatar: u.avatar || '',
+          });
+        }
+      });
+
+      apprList.sort((a, b) => new Date(b.requestedAt || 0).getTime() - new Date(a.requestedAt || 0).getTime());
+      setCashApprovals(apprList);
     } catch (err) {
-      console.warn('Users/Reset requests fetch notice:', err);
+      console.warn('Users/Reset/Cash approvals fetch notice:', err);
+      checkAndHandleQuotaError(err);
     } finally {
       setLoading(false);
     }
@@ -119,7 +233,8 @@ export const AdminUsersManager: React.FC = () => {
     setEditName(user.name || '');
     setEditEmail(user.email || '');
     setEditPhone(user.phone || '');
-    setEditPassword(suggestedPassword || user.loginPassword || '');
+    setEditAvatar(user.avatar || '');
+    setEditPassword(suggestedPassword || '');
     setEditRole(user.role || 'customer');
     setShowPassword(true);
     setStatusMsg(null);
@@ -168,20 +283,20 @@ export const AdminUsersManager: React.FC = () => {
         editRole
       );
 
-      // If phone was changed, update doc
-      if (editPhone.trim() !== (editingUser.phone || '')) {
-        try {
-          await updateDoc(doc(db, 'users', editingUser.uid), {
-            phone: editPhone.trim(),
-          });
-        } catch (e) {
-          console.warn('Phone update note:', e);
-        }
+      // If phone or avatar was changed, update doc
+      try {
+        await updateDoc(doc(db, 'users', editingUser.uid), {
+          phone: editPhone.trim(),
+          avatar: editAvatar || '',
+          updatedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.warn('User doc extra fields update note:', e);
       }
 
       setStatusMsg({
         type: 'success',
-        text: `सफलतापूर्वक अपडेट किया गया! ${editName} के क्रेडेंशियल्स (यूजरनेम/पासवर्ड) तुरंत सक्रिय हो गए हैं।`,
+        text: `सफलतापूर्वक अपडेट किया गया! ${editName} के क्रेडेंशियल्स व फोटो तुरंत सक्रिय हो गए हैं।`,
       });
 
       // Update local state
@@ -193,7 +308,7 @@ export const AdminUsersManager: React.FC = () => {
                 name: editName.trim(),
                 email: editEmail.trim(),
                 phone: editPhone.trim(),
-                loginPassword: editPassword.trim(),
+                avatar: editAvatar || '',
                 role: editRole,
                 resetRequested: false,
               }
@@ -242,20 +357,38 @@ export const AdminUsersManager: React.FC = () => {
     }
     setCreatingUser(true);
     try {
-      const uid = 'usr_' + Date.now();
-      const newUserDoc = {
-        id: uid,
+      const token = await auth.currentUser?.getIdToken();
+      const srvResp = await fetch('/api/admin/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          name: newName.trim(),
+          email: newEmail.trim().toLowerCase(),
+          phone: newPhone.trim(),
+          role: newRole,
+          password: newPassword.trim(),
+        }),
+      });
+
+      if (!srvResp.ok) {
+        const errJson = await srvResp.json().catch(() => ({}));
+        throw new Error(errJson.error || 'सर्वर पर यूजर बनाने में विफल।');
+      }
+
+      const resData = await srvResp.json();
+      const createdUser = resData.user || {
+        id: 'usr_' + Date.now(),
         name: newName.trim(),
         email: newEmail.trim().toLowerCase(),
         phone: newPhone.trim(),
         role: newRole,
-        loginPassword: newPassword.trim(),
         status: 'active',
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
       };
-      await setDoc(doc(db, 'users', uid), newUserDoc, { merge: true });
-      setUsers((prev) => [newUserDoc, ...prev]);
+      setUsers((prev) => [createdUser, ...prev]);
       setIsCreateUserModalOpen(false);
       setNewName('');
       setNewEmail('');
@@ -263,7 +396,7 @@ export const AdminUsersManager: React.FC = () => {
       setNewPassword('');
       setStatusMsg({
         type: 'success',
-        text: `यूजर ${newName} सफलतापूर्वक जोड़ा गया! नया पासवर्ड: ${newPassword}`,
+        text: `यूजर ${newName} सफलतापूर्वक जोड़ा गया! (Firebase Auth द्वारा सुरक्षित)`,
       });
     } catch (e: any) {
       console.error('Create user error:', e);
@@ -291,25 +424,401 @@ export const AdminUsersManager: React.FC = () => {
     window.open(targetUrl, '_blank');
   };
 
+  const handleApproveCashRegistration = async (req: any) => {
+    const targetUid = req.userId || req.id;
+    setApprovingCashId(targetUid);
+    try {
+      const nowIso = new Date().toISOString();
+
+      // 1. Update users document in Firestore to active and approved
+      await updateDoc(doc(db, 'users', targetUid), {
+        status: 'active',
+        approvalStatus: 'approved',
+        registrationFeePaid: true,
+        registrationPaymentStatus: 'approved',
+        approvedAt: nowIso,
+        approvedBy: 'DEEPAK (Super Admin)',
+        updatedAt: nowIso,
+      });
+
+      // 2. Update registration_approvals document
+      await setDoc(doc(db, 'registration_approvals', targetUid), {
+        ...req,
+        status: 'approved',
+        approvedAt: nowIso,
+        approvedBy: 'DEEPAK (Super Admin)',
+        updatedAt: nowIso,
+      }, { merge: true });
+
+      // 3. If service_man, update service_men document to active
+      if (req.role === 'service_man') {
+        try {
+          await updateDoc(doc(db, 'service_men', targetUid), {
+            status: 'active',
+            approvalStatus: 'approved',
+            isVerified: true,
+            updatedAt: nowIso,
+          });
+          await updateDoc(doc(db, 'serviceMen', targetUid), {
+            status: 'active',
+            approvalStatus: 'approved',
+            isVerified: true,
+            updatedAt: nowIso,
+          });
+        } catch (_) {}
+      }
+
+      // 4. If business_partner, update business_partners document
+      if (req.role === 'business_partner') {
+        try {
+          const bpSnap = await getDocs(query(collection(db, 'business_partners'), where('userId', '==', targetUid)));
+          bpSnap.forEach(async (bpDoc) => {
+            await updateDoc(doc(db, 'business_partners', bpDoc.id), {
+              status: 'active',
+              kycStatus: 'verified',
+              updatedAt: nowIso,
+            });
+          });
+        } catch (_) {}
+      }
+
+      // 5. Initialize wallet with clean 0 balance upon registration approval (no unearned money)
+      try {
+        await setDoc(doc(db, 'wallets', targetUid), {
+          id: targetUid,
+          userId: targetUid,
+          balance: 0,
+          pendingBalance: 0,
+          totalEarned: 0,
+          currency: 'INR',
+          updatedAt: nowIso,
+        }, { merge: true });
+      } catch (_) {}
+
+      // 6. Send notification to user
+      try {
+        await addDoc(collection(db, 'notifications'), {
+          recipientId: targetUid,
+          userId: targetUid,
+          targetRole: req.role,
+          type: 'registration_approved',
+          title: 'रजिस्ट्रेशन स्वीकृत! (Registration Approved)',
+          message: `बधाई हो ${req.name}! आपका ₹${req.amount || 121} नकद भुगतान एडमिन द्वारा सत्यापित कर लिया गया है। आपका खाता सक्रिय हो गया है। अब आप लॉगिन कर सभी सेवाओं का उपयोग कर सकते हैं।`,
+          amount: req.amount || 121,
+          createdAt: nowIso,
+          read: false,
+        });
+      } catch (_) {}
+
+      // 7. Dispatch automated member notification
+      try {
+        await sendMemberRegistrationNotification({
+          userId: targetUid,
+          name: req.name,
+          phone: req.phone,
+          email: req.email,
+          role: req.role,
+          memberCode: req.memberCode,
+          amountPaid: req.amount || 121,
+          registeredAt: nowIso,
+        });
+      } catch (_) {}
+
+      // 8. Update local state
+      setCashApprovals((prev) =>
+        prev.map((c) =>
+          (c.id === targetUid || c.userId === targetUid)
+            ? { ...c, status: 'approved', approvedAt: nowIso, approvedBy: 'DEEPAK (Super Admin)' }
+            : c
+        )
+      );
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.uid === targetUid
+            ? { ...u, status: 'active', approvalStatus: 'approved', registrationFeePaid: true, registrationPaymentStatus: 'approved' }
+            : u
+        )
+      );
+
+      setStatusMsg({
+        type: 'success',
+        text: `सफलतापूर्वक स्वीकृत! ${req.name} का नकद रजिस्ट्रेशन (₹${req.amount || 121}) अप्रूव कर दिया गया है और खाता सक्रिय हो गया है।`,
+      });
+    } catch (err: any) {
+      console.error('Approve cash registration error:', err);
+      setStatusMsg({
+        type: 'error',
+        text: 'अप्रूवल में त्रुटि: ' + (err.message || 'Unknown error'),
+      });
+    } finally {
+      setApprovingCashId(null);
+    }
+  };
+
+  const handleRejectCashRegistration = async (req: any, reason = 'नकद राशि अप्राप्त / अमान्य विवरण') => {
+    const targetUid = req.userId || req.id;
+    setRejectingCashId(targetUid);
+    try {
+      const nowIso = new Date().toISOString();
+
+      await updateDoc(doc(db, 'users', targetUid), {
+        status: 'rejected',
+        approvalStatus: 'rejected',
+        registrationPaymentStatus: 'rejected',
+        rejectedAt: nowIso,
+        rejectionReason: reason,
+        updatedAt: nowIso,
+      });
+
+      await setDoc(doc(db, 'registration_approvals', targetUid), {
+        ...req,
+        status: 'rejected',
+        rejectedAt: nowIso,
+        rejectedBy: 'DEEPAK (Super Admin)',
+        rejectionReason: reason,
+        updatedAt: nowIso,
+      }, { merge: true });
+
+      // Notification to user
+      await addDoc(collection(db, 'notifications'), {
+        recipientId: targetUid,
+        userId: targetUid,
+        targetRole: req.role,
+        type: 'registration_rejected',
+        title: 'नकद रजिस्ट्रेशन अस्वीकृत (Cash Registration Rejected)',
+        message: `नमस्ते ${req.name}, आपका नकद रजिस्ट्रेशन अनुरोध अस्वीकृत कर दिया गया है। कारण: ${reason}। कृपया सही विवरण के साथ पुनः प्रयास करें या +91 62675 46945 पर संपर्क करें।`,
+        createdAt: nowIso,
+        read: false,
+      });
+
+      setCashApprovals((prev) =>
+        prev.map((c) =>
+          (c.id === targetUid || c.userId === targetUid)
+            ? { ...c, status: 'rejected', rejectedAt: nowIso, rejectionReason: reason }
+            : c
+        )
+      );
+
+      setStatusMsg({
+        type: 'success',
+        text: `${req.name} का अनुरोध अस्वीकृत कर दिया गया है।`,
+      });
+    } catch (err: any) {
+      console.error('Reject cash error:', err);
+      setStatusMsg({
+        type: 'error',
+        text: 'अस्वीकार करने में त्रुटि: ' + (err.message || 'Error'),
+      });
+    } finally {
+      setRejectingCashId(null);
+    }
+  };
+
+  const handleMarkUserAsCashPaid = async (user: any) => {
+    const targetUid = user.uid || user.id || user.userId;
+    const targetFee = user.registrationFeeAmount || (user.role === 'business_partner' ? 1021 : user.role === 'franchise_partner' ? 1021 : 121);
+    const nowIso = new Date().toISOString();
+    const paymentId = `CASH_ADMIN_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+
+    setApprovingCashId(targetUid);
+    try {
+      // 1. Update users document in Firestore
+      await setDoc(
+        doc(db, 'users', targetUid),
+        {
+          status: 'active',
+          registrationFeePaid: true,
+          registrationFeeAmount: targetFee,
+          registrationPaymentMethod: 'cash',
+          registrationPaymentStatus: 'approved',
+          approvalStatus: 'approved',
+          registrationPaidAt: nowIso,
+          registrationPaymentId: paymentId,
+          approvedBy: 'DEEPAK (Super Admin)',
+          approvedAt: nowIso,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
+
+      // 2. Update registration_approvals document
+      await setDoc(
+        doc(db, 'registration_approvals', targetUid),
+        {
+          id: targetUid,
+          userId: targetUid,
+          name: user.name || 'User',
+          fatherName: user.fatherName || '',
+          motherName: user.motherName || '',
+          noCriminalRecordOath: Boolean(user.noCriminalRecordOath),
+          phone: user.phone || '',
+          email: user.email || '',
+          role: user.role || 'customer',
+          memberCode: user.memberCode || '',
+          amount: targetFee,
+          paymentMethod: 'cash',
+          status: 'approved',
+          approvedAt: nowIso,
+          approvedBy: 'DEEPAK (Super Admin)',
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
+
+      // 3. If business partner, update business_partners collection
+      if (user.role === 'business_partner') {
+        try {
+          const bpSnap = await getDocs(query(collection(db, 'business_partners'), where('userId', '==', targetUid)));
+          bpSnap.forEach(async (bpDoc) => {
+            await updateDoc(doc(db, 'business_partners', bpDoc.id), {
+              status: 'active',
+              paymentMethod: 'cash',
+              registrationFeePaid: true,
+              onboardingPaymentId: paymentId,
+              updatedAt: nowIso,
+            });
+          });
+        } catch (_) {}
+      }
+
+      // 4. Send notification to user
+      try {
+        await addDoc(collection(db, 'notifications'), {
+          recipientId: targetUid,
+          userId: targetUid,
+          targetRole: user.role || 'customer',
+          type: 'registration_approved',
+          title: 'रजिस्ट्रेशन शुल्क नकद प्राप्त व अकाउंट सक्रिय! (Fee Paid & Active)',
+          message: `नमस्ते ${user.name || 'सदस्य'}! आपका ₹${targetFee} नकद (Cash) रजिस्ट्रेशन शुल्क सुपर एडमिन DEEPAK द्वारा प्राप्त कर लिया गया है। आपका खाता 100% सक्रिय (Active) हो चुका है।`,
+          amount: targetFee,
+          createdAt: nowIso,
+          read: false,
+        });
+      } catch (_) {}
+
+      // 5. Send automated SMS & WhatsApp notification log
+      try {
+        await sendMemberRegistrationNotification({
+          userId: targetUid,
+          name: user.name || 'सदस्य',
+          fatherName: user.fatherName,
+          motherName: user.motherName,
+          noCriminalRecordOath: Boolean(user.noCriminalRecordOath),
+          phone: user.phone,
+          email: user.email,
+          role: user.role || 'customer',
+          memberCode: user.memberCode,
+          amountPaid: targetFee,
+          paymentMethod: 'cash',
+          registrationPaymentId: paymentId,
+          registeredAt: nowIso,
+        });
+      } catch (_) {}
+
+      // 6. Update local state
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.uid === targetUid
+            ? {
+                ...u,
+                status: 'active',
+                registrationFeePaid: true,
+                registrationFeeAmount: targetFee,
+                registrationPaymentStatus: 'approved',
+                approvalStatus: 'approved',
+                registrationPaymentMethod: 'cash',
+                registrationPaymentId: paymentId,
+                registrationPaidAt: nowIso,
+              }
+            : u
+        )
+      );
+
+      setCashApprovals((prev) =>
+        prev.map((c) =>
+          c.id === targetUid || c.userId === targetUid
+            ? { ...c, status: 'approved', approvedAt: nowIso, approvedBy: 'DEEPAK (Super Admin)' }
+            : c
+        )
+      );
+
+      setStatusMsg({
+        type: 'success',
+        text: `सफलतापूर्वक नकद प्राप्त! ${user.name || 'सदस्य'} का ₹${targetFee} रजिस्ट्रेशन शुल्क Paid चिह्नित हो गया है और खाता सक्रिय हो गया है।`,
+      });
+    } catch (err: any) {
+      console.error('Mark as cash paid error:', err);
+      setStatusMsg({
+        type: 'error',
+        text: 'शुल्क अपडेट करने में त्रुटि: ' + (err.message || 'Error'),
+      });
+    } finally {
+      setApprovingCashId(null);
+    }
+  };
+
+  const pendingCashApprovals = useMemo(
+    () => cashApprovals.filter((c) => c.status === 'pending'),
+    [cashApprovals]
+  );
+
+  const isPaidUser = (u: any) => {
+    return (
+      u.registrationFeePaid === true ||
+      u.registrationPaymentStatus === 'approved' ||
+      u.approvalStatus === 'approved' ||
+      (u.status === 'active' && u.registrationPaymentStatus !== 'pending_cash_approval' && u.status !== 'pending_approval') ||
+      u.role === 'admin'
+    );
+  };
+
+  const filteredCashApprovals = useMemo(() => {
+    return cashApprovals.filter((c) => {
+      let matchesStatus = true;
+      if (cashFilter === 'pending') matchesStatus = c.status === 'pending';
+      else if (cashFilter === 'approved') matchesStatus = c.status === 'approved';
+      else if (cashFilter === 'rejected') matchesStatus = c.status === 'rejected';
+
+      const s = search.toLowerCase();
+      const matchesSearch =
+        !search ||
+        (c.name && c.name.toLowerCase().includes(s)) ||
+        (c.fatherName && c.fatherName.toLowerCase().includes(s)) ||
+        (c.motherName && c.motherName.toLowerCase().includes(s)) ||
+        (c.email && c.email.toLowerCase().includes(s)) ||
+        (c.phone && c.phone.includes(search)) ||
+        (c.memberCode && c.memberCode.toLowerCase().includes(s));
+
+      return matchesStatus && matchesSearch;
+    });
+  }, [cashApprovals, cashFilter, search]);
+
   const filteredUsers = useMemo(() => {
     return users.filter((u) => {
       let matchesRole = true;
       if (activeTab === 'customers') matchesRole = u.role === 'customer';
       else if (activeTab === 'service_pros') matchesRole = u.role === 'service_man';
-      else if (activeTab === 'partners') matchesRole = u.role === 'business_partner';
+      else if (activeTab === 'partners') matchesRole = u.role === 'business_partner' || u.role === 'franchise_partner';
       else if (activeTab === 'admins') matchesRole = u.role === 'admin';
+
+      let matchesPayment = true;
+      if (paymentFilter === 'paid') matchesPayment = isPaidUser(u);
+      else if (paymentFilter === 'unpaid') matchesPayment = !isPaidUser(u);
 
       const s = search.toLowerCase();
       const matchesSearch =
         !search ||
         (u.name && u.name.toLowerCase().includes(s)) ||
+        (u.fatherName && u.fatherName.toLowerCase().includes(s)) ||
+        (u.motherName && u.motherName.toLowerCase().includes(s)) ||
         (u.email && u.email.toLowerCase().includes(s)) ||
         (u.phone && u.phone.includes(search)) ||
+        (u.memberCode && u.memberCode.toLowerCase().includes(s)) ||
         (u.uid && u.uid.toLowerCase().includes(s));
 
-      return matchesRole && matchesSearch;
+      return matchesRole && matchesPayment && matchesSearch;
     });
-  }, [users, activeTab, search]);
+  }, [users, activeTab, paymentFilter, search]);
 
   // Spark Quota Optimization: Paginate users list
   const totalUserPages = Math.max(1, Math.ceil(filteredUsers.length / pageSize));
@@ -331,15 +840,20 @@ export const AdminUsersManager: React.FC = () => {
   }, [resetRequests, search]);
 
   const counts = useMemo(() => {
+    const paidList = users.filter(isPaidUser);
+    const unpaidList = users.filter((u) => !isPaidUser(u));
     return {
       all: users.length,
+      paid: paidList.length,
+      unpaid: unpaidList.length,
+      cashApprovals: pendingCashApprovals.length,
       resets: pendingResetRequests.length,
       pros: users.filter((u) => u.role === 'service_man').length,
       customers: users.filter((u) => u.role === 'customer').length,
-      partners: users.filter((u) => u.role === 'business_partner').length,
+      partners: users.filter((u) => u.role === 'business_partner' || u.role === 'franchise_partner').length,
       admins: users.filter((u) => u.role === 'admin').length,
     };
-  }, [users, pendingResetRequests]);
+  }, [users, pendingResetRequests, pendingCashApprovals]);
 
   return (
     <div className="space-y-6 pb-20">
@@ -386,6 +900,16 @@ export const AdminUsersManager: React.FC = () => {
             </button>
             <button
               type="button"
+              onClick={handleZeroDeepakWallet}
+              disabled={zeroingDeepakWallet}
+              className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-500 hover:to-rose-600 disabled:opacity-60 text-white font-black text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-red-950/40"
+              title="दीपक का वॉलेट शून्य करें / Zero Deepak's Wallet"
+            >
+              <Wallet className="w-4 h-4 text-white" />
+              <span>{zeroingDeepakWallet ? 'शून्य हो रहा...' : 'दीपक वॉलेट शून्य करें (0 Rs)'}</span>
+            </button>
+            <button
+              type="button"
               onClick={fetchUsersAndRequests}
               disabled={loading}
               className="px-3.5 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer border border-white/10"
@@ -399,7 +923,7 @@ export const AdminUsersManager: React.FC = () => {
       </div>
 
       {/* KPI Stats Row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
         <div
           onClick={() => setActiveTab('all')}
           className={`p-4 rounded-2xl border transition-all cursor-pointer ${
@@ -414,6 +938,32 @@ export const AdminUsersManager: React.FC = () => {
           </div>
           <div className="text-2xl sm:text-3xl font-black text-stone-900">{counts.all}</div>
           <span className="text-[11px] text-stone-500">सभी रोल्स के सदस्य</span>
+        </div>
+
+        <div
+          id="kpi-cash-approvals-card"
+          onClick={() => setActiveTab('pending_approvals')}
+          className={`p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden ${
+            activeTab === 'pending_approvals'
+              ? 'bg-emerald-50 border-emerald-500 shadow-sm ring-2 ring-emerald-500/20'
+              : counts.cashApprovals > 0
+              ? 'bg-emerald-50/60 border-emerald-400 hover:border-emerald-500 shadow-xs'
+              : 'bg-white border-stone-200 hover:border-emerald-200 shadow-xs'
+          }`}
+        >
+          <div className="flex items-center justify-between text-emerald-800 mb-1.5">
+            <span className="text-xs font-black uppercase tracking-wider">नकद अप्रूवल अनुरोध</span>
+            <Banknote className="w-4 h-4 text-emerald-600" />
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="text-2xl sm:text-3xl font-black text-emerald-950">{counts.cashApprovals}</div>
+            {counts.cashApprovals > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white font-bold text-[10px] animate-pulse">
+                स्वीकृति प्रतीक्षारत
+              </span>
+            )}
+          </div>
+          <span className="text-[11px] text-emerald-800 font-medium">Cash Registration से प्राप्त</span>
         </div>
 
         <div
@@ -478,6 +1028,25 @@ export const AdminUsersManager: React.FC = () => {
       {/* Navigation Tabs */}
       <div className="flex items-center gap-1.5 border-b border-stone-200 pb-1 overflow-x-auto no-scrollbar">
         <button
+          id="tab-members-ledger-btn"
+          onClick={() => {
+            setActiveTab('members_ledger');
+            setPaymentFilter('all');
+          }}
+          className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap cursor-pointer flex items-center gap-2 shadow-xs ${
+            activeTab === 'members_ledger'
+              ? 'bg-gradient-to-r from-emerald-600 to-teal-700 text-white ring-2 ring-emerald-400/40'
+              : 'text-emerald-950 bg-emerald-50/90 hover:bg-emerald-100 border border-emerald-300'
+          }`}
+        >
+          <Banknote className="w-4 h-4 text-emerald-300" />
+          <span>📑 सभी पंजीकृत सदस्य व शुल्क लेजर ({counts.all})</span>
+          <span className="px-1.5 py-0.2 rounded-full bg-emerald-900 text-emerald-200 text-[10px] font-bold">
+            Paid: {counts.paid} | Unpaid: {counts.unpaid}
+          </span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('all')}
           className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
             activeTab === 'all'
@@ -486,6 +1055,24 @@ export const AdminUsersManager: React.FC = () => {
           }`}
         >
           सभी उपयोगकर्ता ({counts.all})
+        </button>
+
+        <button
+          id="tab-cash-approvals-btn"
+          onClick={() => setActiveTab('pending_approvals')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-2 ${
+            activeTab === 'pending_approvals'
+              ? 'bg-emerald-600 text-white shadow-xs'
+              : 'text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
+          }`}
+        >
+          <Banknote className="w-3.5 h-3.5" />
+          <span>💵 नकद रजिस्ट्रेशन अप्रूवल</span>
+          {pendingCashApprovals.length > 0 && (
+            <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-white text-[10px] font-black animate-pulse">
+              {pendingCashApprovals.length}
+            </span>
+          )}
         </button>
 
         <button
@@ -564,27 +1151,67 @@ export const AdminUsersManager: React.FC = () => {
         </button>
       </div>
 
-      {/* Search Bar - only shown for table views */}
+      {/* Search & Fee Status Filter Bar - only shown for table views */}
       {activeTab !== 'manual_reset_utility' && (
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="flex-1 relative">
+        <div className="flex flex-col md:flex-row items-center gap-3">
+          <div className="flex-1 relative w-full">
             <Search className="w-4 h-4 text-stone-400 absolute left-3.5 top-3" />
             <input
               id="admin-users-search-input"
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="नाम, यूजरनेम, ईमेल पता, फोन नंबर या यूजर आईडी द्वारा खोजें..."
+              placeholder="नाम, पिता/माता का नाम, ईमेल, फोन नंबर, मेम्बर कोड या UID द्वारा खोजें..."
               className="w-full pl-10 pr-4 py-2.5 text-xs rounded-2xl bg-white border border-stone-200 focus:outline-hidden focus:ring-2 focus:ring-amber-500 shadow-xs"
             />
             {search && (
               <button
                 onClick={() => setSearch('')}
-                className="absolute right-3 top-2.5 text-stone-400 hover:text-stone-600 text-xs"
+                className="absolute right-3 top-2.5 text-stone-400 hover:text-stone-600 text-xs cursor-pointer"
               >
                 Clear
               </button>
             )}
+          </div>
+
+          {/* Registration Fee Status Filters */}
+          <div className="flex items-center gap-1.5 w-full md:w-auto overflow-x-auto no-scrollbar shrink-0">
+            <span className="text-[11px] font-bold text-stone-500 hidden sm:inline mr-1">शुल्क स्थिति:</span>
+            <button
+              type="button"
+              onClick={() => setPaymentFilter('all')}
+              className={`px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                paymentFilter === 'all'
+                  ? 'bg-stone-900 text-white shadow-xs'
+                  : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'
+              }`}
+            >
+              सभी ({counts.all})
+            </button>
+            <button
+              type="button"
+              onClick={() => setPaymentFilter('paid')}
+              className={`px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                paymentFilter === 'paid'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-emerald-50 border border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>शुल्क Paid ({counts.paid})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPaymentFilter('unpaid')}
+              className={`px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                paymentFilter === 'unpaid'
+                  ? 'bg-amber-500 text-stone-950 shadow-xs font-black'
+                  : 'bg-amber-50 border border-amber-200 text-amber-900 hover:bg-amber-100'
+              }`}
+            >
+              <Banknote className="w-3.5 h-3.5 text-amber-700" />
+              <span>Unpaid / बकाया ({counts.unpaid})</span>
+            </button>
           </div>
         </div>
       )}
@@ -695,40 +1322,334 @@ export const AdminUsersManager: React.FC = () => {
             </div>
           </div>
         </div>
+      ) : activeTab === 'pending_approvals' ? (
+        <div className="space-y-4">
+          <div className="bg-emerald-50/80 border border-emerald-200 rounded-2xl p-4 text-xs text-emerald-950 flex items-start gap-3">
+            <Banknote className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">
+                उपयोगकर्ताओं द्वारा नकद (Cash) भुगतान से किए गए रजिस्ट्रेशन अनुरोध:
+              </p>
+              <p className="text-emerald-800 text-[11px] mt-0.5 leading-relaxed">
+                जब भी कोई ग्राहक (₹121), कारीगर/सर्विस प्रो (₹121) या बिजनेस पार्टनर (₹1021) 'नकद भुगतान (Cash)' चुनकर रजिस्ट्रेशन करता है, उसका अनुरोध यहां आता है। सुपर एडमिन DEEPAK नकद राशि प्राप्त कर 'स्वीकार करें (Approve)' दबाकर अकाउंट तुरंत सक्रिय कर सकते हैं।
+              </p>
+            </div>
+          </div>
+
+          {/* Status Filter Tabs */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCashFilter('pending')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                cashFilter === 'pending'
+                  ? 'bg-amber-500 text-stone-950 shadow-xs'
+                  : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'
+              }`}
+            >
+              <span>लंबित अनुरोध (Pending)</span>
+              {pendingCashApprovals.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-stone-950 text-amber-400 text-[10px] font-black">
+                  {pendingCashApprovals.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setCashFilter('approved')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                cashFilter === 'approved'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'
+              }`}
+            >
+              <span>स्वीकृत (Approved)</span>
+            </button>
+
+            <button
+              onClick={() => setCashFilter('rejected')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                cashFilter === 'rejected'
+                  ? 'bg-rose-600 text-white shadow-xs'
+                  : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'
+              }`}
+            >
+              <span>अस्वीकृत (Rejected)</span>
+            </button>
+
+            <button
+              onClick={() => setCashFilter('all')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                cashFilter === 'all'
+                  ? 'bg-stone-900 text-white shadow-xs'
+                  : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'
+              }`}
+            >
+              <span>सभी अनुरोध (All)</span>
+            </button>
+          </div>
+
+          <div className="bg-white rounded-3xl border border-stone-200 overflow-hidden shadow-xs">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-stone-50 border-b border-stone-200 text-stone-500 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="py-3.5 px-4">आवेदक / Name</th>
+                    <th className="py-3.5 px-4">भूमिका / Role</th>
+                    <th className="py-3.5 px-4">शुल्क व माध्यम / Fee</th>
+                    <th className="py-3.5 px-4">संपर्क व सत्यापन / Contact</th>
+                    <th className="py-3.5 px-4">अनुरोध समय</th>
+                    <th className="py-3.5 px-4">स्थिति / Status</th>
+                    <th className="py-3.5 px-4 text-right">एडमिन एक्शन</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100">
+                  {filteredCashApprovals.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-stone-400 text-xs">
+                        {loading ? 'लोड हो रहा है...' : 'कोई नकद रजिस्ट्रेशन अनुरोध नहीं मिला।'}
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredCashApprovals.map((req) => {
+                      const isApproving = approvingCashId === (req.userId || req.id);
+                      const isRejecting = rejectingCashId === (req.userId || req.id);
+                      const cleanPhone = (req.phone || '').replace(/[^0-9]/g, '');
+                      const waText = encodeURIComponent(
+                        `नमस्ते ${req.name}, HARDINKAAM एडमिन हेड ऑफिस से। आपका ₹${req.amount || 121} नकद रजिस्ट्रेशन अनुरोध प्राप्त हुआ है।`
+                      );
+
+                      return (
+                        <tr key={req.id || req.userId} className="hover:bg-amber-50/20 transition-colors">
+                          {/* Name & Avatar */}
+                          <td className="py-3.5 px-4">
+                            <div className="flex items-center gap-3">
+                              {req.avatar ? (
+                                <img
+                                  src={req.avatar}
+                                  alt={req.name}
+                                  className="w-9 h-9 rounded-2xl object-cover border border-stone-200 shrink-0"
+                                />
+                              ) : (
+                                <div className="w-9 h-9 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs shrink-0 border border-emerald-200">
+                                  {req.name?.charAt(0) || 'U'}
+                                </div>
+                              )}
+                              <div>
+                                <div className="font-bold text-stone-900 flex items-center gap-1.5">
+                                  <span>{req.name}</span>
+                                  {req.status === 'pending' && (
+                                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-stone-400 font-mono">
+                                  {req.memberCode || `ID: ${(req.userId || req.id)?.substring(0, 10)}`}
+                                </div>
+                                {(req.fatherName || req.motherName) && (
+                                  <div className="text-[10px] text-stone-600 mt-0.5">
+                                    {req.fatherName && <span>पिता: <strong>{req.fatherName}</strong> </span>}
+                                    {req.motherName && <span>माता: <strong>{req.motherName}</strong></span>}
+                                  </div>
+                                )}
+                                <div className="mt-0.5">
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
+                                    <ShieldCheck className="w-2.5 h-2.5" />
+                                    <span>आपराधिक रिकॉर्ड नहीं (Oath Verified)</span>
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Role */}
+                          <td className="py-3.5 px-4">
+                            <span
+                              className={`px-2.5 py-1 rounded-full font-bold text-[10px] uppercase inline-flex items-center gap-1 ${
+                                req.role === 'service_man'
+                                  ? 'bg-blue-100 text-blue-900 border border-blue-200'
+                                  : req.role === 'business_partner'
+                                  ? 'bg-purple-100 text-purple-900 border border-purple-200'
+                                  : 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                              }`}
+                            >
+                              {req.role === 'service_man'
+                                ? 'सर्विसमैन / प्रो'
+                                : req.role === 'business_partner'
+                                ? 'बिजनेस पार्टनर'
+                                : 'कस्टमर'}
+                            </span>
+                          </td>
+
+                          {/* Amount & Mode */}
+                          <td className="py-3.5 px-4">
+                            <div className="font-black text-stone-900 text-sm">
+                              ₹{req.amount || 121}
+                            </div>
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
+                              <Banknote className="w-3 h-3" />
+                              <span>नकद (Cash)</span>
+                            </span>
+                          </td>
+
+                          {/* Contact */}
+                          <td className="py-3.5 px-4">
+                            <div className="text-stone-800 font-medium">{req.phone || '—'}</div>
+                            <div className="text-stone-500 text-[10px]">{req.email || '—'}</div>
+                            <div className="flex items-center gap-2 mt-1">
+                              {cleanPhone && (
+                                <>
+                                  <a
+                                    href={`https://wa.me/${cleanPhone.startsWith('91') ? cleanPhone : '91' + cleanPhone}?text=${waText}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="p-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center gap-1 border border-emerald-200"
+                                    title="WhatsApp message"
+                                  >
+                                    <MessageSquare className="w-3 h-3" />
+                                    <span>WhatsApp</span>
+                                  </a>
+                                  <a
+                                    href={`tel:${cleanPhone}`}
+                                    className="p-1 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-700 text-[10px] font-bold flex items-center gap-1 border border-stone-200"
+                                    title="Call user"
+                                  >
+                                    <PhoneCall className="w-3 h-3" />
+                                    <span>कॉल</span>
+                                  </a>
+                                </>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Requested At */}
+                          <td className="py-3.5 px-4 text-stone-500 text-[11px]">
+                            <div className="flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5 text-stone-400" />
+                              <span>
+                                {req.requestedAt
+                                  ? new Date(req.requestedAt).toLocaleString('en-IN', {
+                                      day: 'numeric',
+                                      month: 'short',
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })
+                                  : '—'}
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Status */}
+                          <td className="py-3.5 px-4">
+                            {req.status === 'pending' ? (
+                              <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 font-bold text-[10px] uppercase inline-flex items-center gap-1 border border-amber-300">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-600 animate-pulse" />
+                                सत्यापन प्रतीक्षारत (Pending)
+                              </span>
+                            ) : req.status === 'approved' ? (
+                              <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-900 font-bold text-[10px] uppercase inline-flex items-center gap-1 border border-emerald-300">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                स्वीकृत (Approved)
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-1 rounded-full bg-rose-100 text-rose-900 font-bold text-[10px] uppercase inline-flex items-center gap-1 border border-rose-300">
+                                <XCircle className="w-3 h-3 text-rose-600" />
+                                अस्वीकृत (Rejected)
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Admin Action */}
+                          <td className="py-3.5 px-4 text-right">
+                            {req.status === 'pending' ? (
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={isApproving || isRejecting}
+                                  onClick={() => handleApproveCashRegistration(req)}
+                                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold text-xs flex items-center gap-1 cursor-pointer shadow-xs transition"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  <span>{isApproving ? 'अप्रूव हो रहा...' : 'स्वीकार करें'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isApproving || isRejecting}
+                                  onClick={() => handleRejectCashRegistration(req)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 disabled:opacity-60 font-bold text-xs flex items-center gap-1 cursor-pointer transition"
+                                >
+                                  <XCircle className="w-3.5 h-3.5" />
+                                  <span>अस्वीकार</span>
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="text-[11px] text-stone-500 font-medium">
+                                {req.status === 'approved'
+                                  ? `स्वीकृत द्वारा: ${req.approvedBy || 'DEEPAK'}`
+                                  : 'अस्वीकृत'}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       ) : (
-        /* VIEW 2: Users Table */
+        /* VIEW 2: Users & Members Ledger Table */
         <div className="bg-white rounded-3xl border border-stone-200 overflow-hidden shadow-xs">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-stone-50 border-b border-stone-200 text-stone-500 font-bold uppercase text-[10px]">
                 <tr>
-                  <th className="py-3.5 px-4">उपयोगकर्ता / Name</th>
-                  <th className="py-3.5 px-4">संपर्क (Email &amp; Mobile)</th>
+                  <th className="py-3.5 px-4">पंजीकृत सदस्य / Member</th>
                   <th className="py-3.5 px-4">भूमिका / Role</th>
+                  <th className="py-3.5 px-4">संपर्क / Contact</th>
+                  <th className="py-3.5 px-4">रजिस्ट्रेशन शुल्क / Fee Status</th>
                   <th className="py-3.5 px-4">पासवर्ड स्थिति / Password</th>
-                  <th className="py-3.5 px-4 text-right">प्रशासनिक रीसेट / Override</th>
+                  <th className="py-3.5 px-4 text-right">प्रशासनिक एक्शन / Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
                 {filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-12 text-center text-stone-400 text-xs">
-                      {loading ? 'उपयोगकर्ताओं की सूची लोड हो रही है...' : 'कोई उपयोगकर्ता नहीं मिला।'}
+                    <td colSpan={6} className="py-12 text-center text-stone-400 text-xs">
+                      {loading ? 'उपयोगकर्ताओं की सूची लोड हो रही है...' : 'कोई पंजीकृत उपयोगकर्ता नहीं मिला।'}
                     </td>
                   </tr>
                 ) : (
-                  paginatedUsers.map((user) => {
+                  paginatedUsers.map((user, idx) => {
                     const isRevealed = Boolean(revealedPasswords[user.uid]);
+                    const isPaid = isPaidUser(user);
+                    const userFee =
+                      user.registrationFeeAmount ||
+                      (user.role === 'business_partner' || user.role === 'franchise_partner' ? 1021 : user.role === 'admin' ? 0 : 121);
+                    const cleanPhone = (user.phone || '').replace(/[^0-9]/g, '');
+                    const isApproving = approvingCashId === user.uid;
+                    const waText = encodeURIComponent(
+                      `नमस्ते ${user.name || 'सदस्य'}, HARDINKAAM एडमिन हेड ऑफिस से। आपका मेम्बर कोड ${user.memberCode || user.uid?.substring(0, 8)} है।`
+                    );
+
                     return (
-                      <tr key={user.uid} className="hover:bg-amber-50/20 transition-colors">
-                        {/* Name & ID */}
+                      <tr key={user.uid || user.id || `user_${idx}`} className="hover:bg-amber-50/20 transition-colors">
+                        {/* Name, Member Code, Parents & Oath */}
                         <td className="py-3.5 px-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-2xl bg-stone-100 text-stone-700 flex items-center justify-center font-bold text-xs shrink-0 border border-stone-200">
-                              {user.name?.charAt(0) || user.email?.charAt(0) || 'U'}
-                            </div>
+                          <div className="flex items-start gap-3">
+                            {user.avatar ? (
+                              <img
+                                src={user.avatar}
+                                alt={user.name}
+                                className="w-10 h-10 rounded-2xl object-cover border border-stone-200 shrink-0 mt-0.5"
+                              />
+                            ) : (
+                              <div className="w-10 h-10 rounded-2xl bg-stone-100 text-stone-700 flex items-center justify-center font-bold text-xs shrink-0 border border-stone-200 mt-0.5">
+                                {user.name?.charAt(0) || user.email?.charAt(0) || 'U'}
+                              </div>
+                            )}
                             <div>
-                              <div className="font-bold text-stone-900 flex items-center gap-1.5">
+                              <div className="font-black text-stone-900 flex items-center gap-1.5 text-xs sm:text-sm">
                                 <span>{user.name || 'Anonymous User'}</span>
                                 {user.resetRequested && (
                                   <span className="px-1.5 py-0.2 rounded-full bg-orange-100 text-orange-800 text-[9px] font-black border border-orange-200">
@@ -736,105 +1657,178 @@ export const AdminUsersManager: React.FC = () => {
                                   </span>
                                 )}
                               </div>
-                              <div className="text-[10px] text-stone-400 font-mono">
-                                UID: {user.uid?.substring(0, 10)}...
+                              <div className="text-[10px] text-stone-500 font-mono flex items-center gap-1">
+                                <span className="font-bold text-amber-700">{user.memberCode || `ID: ${user.uid?.substring(0, 10)}`}</span>
+                                {user.createdAt && (
+                                  <span className="text-stone-400">
+                                    • {new Date(user.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Father & Mother Name */}
+                              {(user.fatherName || user.motherName) && (
+                                <div className="text-[10px] text-stone-700 mt-0.5 flex flex-wrap gap-x-2">
+                                  {user.fatherName && (
+                                    <span>
+                                      पिता: <strong className="text-stone-900">{user.fatherName}</strong>
+                                    </span>
+                                  )}
+                                  {user.motherName && (
+                                    <span>
+                                      माता: <strong className="text-stone-900">{user.motherName}</strong>
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Oath Badge */}
+                              <div className="mt-1">
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
+                                  <ShieldCheck className="w-2.5 h-2.5 text-emerald-600" />
+                                  <span>शपथ: कोई आपराधिक रिकॉर्ड नहीं</span>
+                                </span>
                               </div>
                             </div>
                           </div>
                         </td>
 
-                        {/* Contact */}
-                        <td className="py-3.5 px-4">
-                          <div className="text-stone-800 font-medium">{user.email || '—'}</div>
-                          <div className="text-stone-500 text-[11px]">{user.phone || '—'}</div>
-                        </td>
-
                         {/* Role */}
                         <td className="py-3.5 px-4">
                           <span
-                            className={`px-2.5 py-0.8 rounded-full font-bold text-[10px] uppercase inline-flex items-center gap-1 ${
+                            className={`px-2.5 py-1 rounded-full font-bold text-[10px] uppercase inline-flex items-center gap-1 ${
                               user.role === 'admin'
                                 ? 'bg-amber-100 text-amber-900 border border-amber-200'
                                 : user.role === 'service_man'
                                 ? 'bg-blue-100 text-blue-900 border border-blue-200'
-                                : user.role === 'business_partner'
+                                : user.role === 'business_partner' || user.role === 'franchise_partner'
                                 ? 'bg-purple-100 text-purple-900 border border-purple-200'
-                                : 'bg-stone-100 text-stone-800 border border-stone-200'
+                                : 'bg-emerald-100 text-emerald-900 border border-emerald-200'
                             }`}
                           >
                             {user.role === 'admin' && <ShieldCheck className="w-3 h-3 text-amber-700" />}
                             {user.role === 'service_man' && <Wrench className="w-3 h-3 text-blue-700" />}
-                            {user.role === 'business_partner' && <Briefcase className="w-3 h-3 text-purple-700" />}
-                            {user.role}
+                            {(user.role === 'business_partner' || user.role === 'franchise_partner') && (
+                              <Briefcase className="w-3 h-3 text-purple-700" />
+                            )}
+                            {user.role === 'service_man'
+                              ? 'सर्विसमैन / प्रो'
+                              : user.role === 'business_partner' || user.role === 'franchise_partner'
+                              ? 'पार्टनर / फ्रेंचाइजी'
+                              : user.role === 'admin'
+                              ? 'एडमिन'
+                              : 'ग्राहक (Customer)'}
                           </span>
                         </td>
 
-                        {/* Password Status */}
+                        {/* Contact */}
                         <td className="py-3.5 px-4">
-                          {user.loginPassword ? (
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono text-xs text-stone-800 bg-stone-100 px-2 py-0.5 rounded-md border border-stone-200">
-                                {isRevealed ? user.loginPassword : '••••••••'}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setRevealedPasswords((prev) => ({
-                                    ...prev,
-                                    [user.uid]: !isRevealed,
-                                  }))
-                                }
-                                className="text-stone-400 hover:text-stone-700 p-1 cursor-pointer"
-                                title={isRevealed ? 'पासवर्ड छुपाएं' : 'पासवर्ड देखें'}
+                          <div className="text-stone-900 font-bold">{user.phone || '—'}</div>
+                          <div className="text-stone-500 text-[10px] truncate max-w-[150px]">{user.email || '—'}</div>
+                          {cleanPhone && (
+                            <div className="flex items-center gap-1.5 mt-1">
+                              <a
+                                href={`https://wa.me/${cleanPhone.startsWith('91') ? cleanPhone : '91' + cleanPhone}?text=${waText}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-1.5 py-0.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center gap-1 border border-emerald-200"
+                                title="WhatsApp संदेश भेजें"
                               >
-                                {isRevealed ? (
-                                  <EyeOff className="w-3.5 h-3.5" />
-                                ) : (
-                                  <Eye className="w-3.5 h-3.5" />
-                                )}
-                              </button>
+                                <MessageSquare className="w-2.5 h-2.5" />
+                                <span>WhatsApp</span>
+                              </a>
+                              <a
+                                href={`tel:${cleanPhone}`}
+                                className="px-1.5 py-0.5 rounded-md bg-stone-100 hover:bg-stone-200 text-stone-700 text-[10px] font-bold flex items-center gap-1 border border-stone-200"
+                                title="कॉल करें"
+                              >
+                                <PhoneCall className="w-2.5 h-2.5" />
+                                <span>कॉल</span>
+                              </a>
                             </div>
-                          ) : (
-                            <span className="text-[11px] text-stone-400 italic">
-                              डिफ़ॉल्ट / Google Auth
-                            </span>
                           )}
                         </td>
 
-                        {/* Reset Action */}
+                        {/* Registration Fee Status */}
+                        <td className="py-3.5 px-4">
+                          {user.role === 'admin' ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-stone-100 text-stone-600">
+                              प्रशासनिक खाता
+                            </span>
+                          ) : isPaid ? (
+                            <div>
+                              <span className="px-2.5 py-1 rounded-full font-black text-[10px] uppercase inline-flex items-center gap-1 bg-emerald-100 text-emerald-900 border border-emerald-300">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                <span>₹{userFee} Paid</span>
+                              </span>
+                              <div className="text-[10px] text-stone-500 mt-1 flex items-center gap-1">
+                                <span className="font-semibold capitalize">
+                                  {user.registrationPaymentMethod === 'cash' ? '💵 नकद (Cash)' : '💳 ऑनलाइन (Razorpay)'}
+                                </span>
+                              </div>
+                              {user.registrationPaymentId && (
+                                <div className="text-[9px] text-stone-400 font-mono">
+                                  Ref: {user.registrationPaymentId.substring(0, 14)}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div>
+                              <span className="px-2.5 py-1 rounded-full font-black text-[10px] uppercase inline-flex items-center gap-1 bg-amber-100 text-amber-900 border border-amber-300">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-600 animate-pulse" />
+                                <span>₹{userFee} Unpaid / बकाया</span>
+                              </span>
+                              <div className="text-[10px] text-amber-800 font-medium mt-0.5">
+                                भुगतान प्रतीक्षारत
+                              </div>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Auth Status */}
+                        <td className="py-3.5 px-4">
+                          <span className="inline-flex items-center gap-1 font-mono text-[11px] text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                            Firebase Auth
+                          </span>
+                        </td>
+
+                        {/* Administrative Actions */}
                         <td className="py-3.5 px-4 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            {user.loginPassword && (
+                          <div className="flex items-center justify-end flex-wrap gap-1.5">
+                            {/* Instant Cash Payment Button if unpaid */}
+                            {!isPaid && user.role !== 'admin' && (
                               <button
                                 type="button"
-                                onClick={() =>
-                                  copyCredentials(user.name, user.email, user.loginPassword, user.phone)
-                                }
-                                className="p-1.5 rounded-xl border border-stone-200 hover:bg-stone-100 text-stone-600 transition-colors cursor-pointer"
-                                title="क्रेडेंशियल्स कॉपी करें"
+                                disabled={isApproving}
+                                onClick={() => handleMarkUserAsCashPaid(user)}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 disabled:opacity-60 text-white font-black text-xs cursor-pointer shadow-sm transition"
+                                title="उपयोगकर्ता से नकद प्राप्त कर शुल्क को तुरंत Paid चिह्नित करें"
                               >
-                                <Copy className="w-3.5 h-3.5" />
+                                <Banknote className="w-3.5 h-3.5" />
+                                <span>{isApproving ? 'अपडेट हो रहा...' : `💵 नकद लेकर Paid करें (₹${userFee})`}</span>
                               </button>
                             )}
+
                             <button
                               id={`open-utility-btn-${user.uid}`}
                               onClick={() => {
                                 setSelectedUserForUtility(user);
                                 setActiveTab('manual_reset_utility');
                               }}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs cursor-pointer shadow-xs transition-colors"
-                              title="इस उपयोगकर्ता का पासवर्ड रीसेट यूटिलिटी में खोलें"
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs cursor-pointer shadow-xs transition-colors"
+                              title="पासवर्ड रीसेट यूटिलिटी"
                             >
                               <KeyRound className="w-3.5 h-3.5" />
-                              <span>पासवर्ड रीसेट यूटिलिटी</span>
+                              <span className="hidden sm:inline">रीसेट</span>
                             </button>
+
                             <button
                               id={`edit-credentials-btn-${user.uid}`}
                               onClick={() => openEditModal(user)}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs cursor-pointer transition-colors"
+                              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-800 border border-stone-300 font-bold text-xs cursor-pointer transition-colors"
                               title="यूजरनेम, फोन व रोल बदलें"
                             >
-                              <span>विवरण बदलें</span>
+                              <span>संपादित</span>
                             </button>
                           </div>
                         </td>
@@ -945,6 +1939,15 @@ export const AdminUsersManager: React.FC = () => {
               <div className="p-2.5 rounded-xl bg-stone-50 border border-stone-200 flex items-center justify-between text-[11px] text-stone-500">
                 <span>टारगेट यूजर आईडी:</span>
                 <span className="font-mono font-bold text-stone-800">{editingUser.uid}</span>
+              </div>
+
+              {/* Photo / Avatar Section */}
+              <div className="p-3 bg-stone-50 rounded-2xl border border-stone-200">
+                <PhotoCaptureWidget
+                  photo={editAvatar}
+                  onPhotoChange={(newPhoto) => setEditAvatar(newPhoto || '')}
+                  label="सदस्य की फ़ोटो बदलें / अपलोड करें (Member Photo)"
+                />
               </div>
 
               {/* 1. Username / Name */}
